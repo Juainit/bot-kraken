@@ -115,5 +115,14 @@ async function checkTrailingStop() {
     console.error('⚠️ Error monitoreando:', error.message);
   }
 }
-
+// Añade esto ANTES del app.listen:
+app.get('/', (req, res) => {
+  res.status(200).json({ 
+    status: '🚀 Bot activo',
+    endpoints: {
+      alerta: 'POST /alerta',
+      description: 'Envía una alerta de TradingView para comprar en Kraken'
+    }
+  });
+});
 app.listen(PORT, () => console.log(`Bot activo en puerto ${PORT}`));
