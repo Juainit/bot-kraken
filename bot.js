@@ -10,8 +10,17 @@ const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 let activeTrade = null;
 
 // Middleware para parsear JSON y texto plano
-app.use(express.json());
 app.use(express.text({ type: '*/*' }));
+// Middleware para parsear JSON (nueva versión mejorada)
+app.use(express.json({
+  verify: (req, res, buf) => {
+    try {
+      JSON.parse(buf.toString());
+    } catch (e) {
+      throw new Error('JSON inválido');
+    }
+  }
+}));
 
 // Endpoint para alertas (¡VERSIÓN ACTUALIZADA!)
 app.post('/alerta', async (req, res) => {
