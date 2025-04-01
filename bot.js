@@ -38,24 +38,19 @@ app.use((req, res, next) => {
 });
 // ============================================
 
-// Endpoint para alertas (¡VERSIÓN ACTUALIZADA!)
 app.post('/alerta', async (req, res) => {
-  console.log("📨 Body recibido (RAW):", req.body); // <- Nuevo log
-  console.log("📝 Headers recibidos:", req.headers); // <- Nuevo log
+  console.log("Body recibido (objeto):", req.body); // <-- Verificamos el body ya parseado
   
   try {
-    let data;
-    if (typeof req.body === 'string') {
-      console.log("🔍 Body es string, contenido:", req.body); // <- Nuevo log
-      const rawData = req.body.replace(/\{\{|\}\}/g, '').trim();
-      data = JSON.parse(rawData);
-    } else {
-      data = req.body;
+    // Verificamos que req.body es un objeto válido
+    if (!req.body || typeof req.body !== 'object') {
+      throw new Error('El cuerpo de la solicitud no es un JSON válido');
     }
 
-    const { par, cantidadUSD, trailingStopPercent } = data;
+    // Extraemos parámetros directamente del body ya parseado
+    const { par, cantidadUSD, trailingStopPercent } = req.body;
 
-    // 2. Validaciones básicas
+    // Validaciones básicas
     if (activeTrade) {
       return res.status(400).json({ error: 'Ya hay un trade activo. Vende antes de comprar.' });
     }
@@ -63,13 +58,13 @@ app.post('/alerta', async (req, res) => {
       return res.status(400).json({ error: 'Faltan parámetros (par, cantidadUSD, trailingStopPercent)' });
     }
 
-    // 3. Limpiar y validar el par
-    const cleanPair = par.replace(/[^a-zA-Z0-9]/g, ''); // Elimina caracteres no alfanuméricos
+    // Limpiar y validar el par
+    const cleanPair = par.replace(/[^a-zA-Z0-9]/g, '');
     if (cleanPair !== par) {
       console.warn(`⚠️ Par corregido: ${par} → ${cleanPair}`);
     }
 
-    // 4. Verificar si el par existe en Kraken
+    // Verificar si el par existe en Kraken
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`).catch(e => {
       throw new Error(`Par ${cleanPair} no válido en Kraken. ¿Quizás es REQUSD o SOLUSD?`);
     });
@@ -78,7 +73,7 @@ app.post('/alerta', async (req, res) => {
       throw new Error(`Par ${cleanPair} no encontrado en Kraken`);
     }
 
-    // 5. Lógica original de compra (sin cambios)
+    // Lógica de compra
     const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
     const cantidadCrypto = (cantidadUSD / currentPrice).toFixed(8);
 
@@ -101,10 +96,10 @@ app.post('/alerta', async (req, res) => {
     res.status(200).json({ message: 'Compra exitosa' });
 
   } catch (error) {
-    console.error('❌ Error mejorado:', error.message);
+    console.error('❌ Error en endpoint /alerta:', error.message);
     res.status(500).json({ 
       error: error.message,
-      suggestion: "Usa pares válidos como REQUSD, SOLUSD o XBTUSD. Ver lista: https://api.kraken.com/0/public/AssetPairs"
+      suggestion: "Verifica el formato: {'par':'SOLUSD','cantidadUSD':12,'trailingStopPercent':5}"
     });
   }
 });
