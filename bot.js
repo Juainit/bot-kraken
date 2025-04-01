@@ -10,11 +10,26 @@ const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 // Estado global: solo 1 trade activo a la vez
 let activeTrade = null;
 
-app.use(express.json());
+// Middleware para parsear tanto JSON como texto plano (RAW)
+app.use(express.json()); // Intenta parsear como JSON primero
+app.use(express.text({ type: '*/*' })); // Si falla, acepta texto plano
 
 // Endpoint para alertas de TradingView
 app.post('/alerta', async (req, res) => {
-  const { par, cantidad, trailingStopPercent } = req.body;
+  let data;
+  
+  try {
+    // Intenta parsear el body como JSON (funciona si el Content-Type es correcto)
+    if (typeof req.body === 'string') {
+      data = JSON.parse(req.body); // Para TradingView (texto plano)
+    } else {
+      data = req.body; // Para solicitudes con Content-Type: application/json
+    }
+  } catch (e) {
+    return res.status(400).json({ error: 'Formato inválido. Envía un JSON válido.' });
+  }
+
+  const { par, cantidad, trailingStopPercent } = data;
 
   // Validaciones
   if (activeTrade) {
@@ -51,7 +66,7 @@ app.post('/alerta', async (req, res) => {
   }
 });
 
-// Función para verificar trailing stop
+// Función para verificar trailing stop (sin cambios)
 async function checkTrailingStop() {
   if (!activeTrade) return;
 
