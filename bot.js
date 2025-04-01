@@ -9,18 +9,24 @@ const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 
 let activeTrade = null;
 
-// Middleware para parsear JSON y texto plano
-app.use(express.text({ type: '*/*' }));
-// Middleware para parsear JSON (nueva versión mejorada)
-app.use(express.json({
-  verify: (req, res, buf) => {
-    try {
-      JSON.parse(buf.toString());
-    } catch (e) {
-      throw new Error('JSON inválido');
-    }
+// ===== MIDDLEWARE UNIFICADO PARA PARSING =====
+app.use((req, res, next) => {
+  if (req.headers['content-type'] === 'application/json') {
+    let data = '';
+    req.on('data', chunk => data += chunk);
+    req.on('end', () => {
+      try {
+        req.body = JSON.parse(data);
+        next();
+      } catch (e) {
+        res.status(400).json({ error: 'JSON inválido' });
+      }
+    });
+  } else {
+    express.text({ type: '*/*' })(req, res, next);
   }
-}));
+});
+// ============================================
 
 // Endpoint para alertas (¡VERSIÓN ACTUALIZADA!)
 app.post('/alerta', async (req, res) => {
