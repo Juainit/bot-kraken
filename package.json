@@ -1,0 +1,11 @@
+{
+  "name": "bot-kraken",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "kraken-api": "^1.0.0"
+  }
+}
