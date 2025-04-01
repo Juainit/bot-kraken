@@ -15,11 +15,14 @@ app.use(express.text({ type: '*/*' }));
 
 // Endpoint para alertas (¡VERSIÓN ACTUALIZADA!)
 app.post('/alerta', async (req, res) => {
-  let data;
+  console.log("📨 Body recibido (RAW):", req.body); // <- Nuevo log
+  console.log("📝 Headers recibidos:", req.headers); // <- Nuevo log
+  
   try {
-    // 1. Parsear el body (soporta JSON y texto plano)
+    let data;
     if (typeof req.body === 'string') {
-      const rawData = req.body.replace(/\{\{|\}\}/g, '').trim(); // Elimina {{}} si existen
+      console.log("🔍 Body es string, contenido:", req.body); // <- Nuevo log
+      const rawData = req.body.replace(/\{\{|\}\}/g, '').trim();
       data = JSON.parse(rawData);
     } else {
       data = req.body;
