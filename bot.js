@@ -4,20 +4,29 @@ const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CHECK_INTERVAL = 600000; // 10 minutos (ajustable)
+const CHECK_INTERVAL = 600000; // 10 minutos
 const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 
 let activeTrade = null;
 
+// Middleware para parsear JSON y texto plano
 app.use(express.json());
-app.use(express.text({ type: '*/*' })); // Acepta texto plano (para TradingView)
+app.use(express.text({ type: '*/*' }));
 
+// Endpoint para alertas
 app.post('/alerta', async (req, res) => {
   let data;
   try {
-    // Parsear el body (JSON o texto plano)
-    data = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
-    const { par, cantidadUSD, trailingStopPercent } = data; // Ahora usamos cantidadUSD
+    // Parsear el body (soporta JSON y texto plano)
+    if (typeof req.body === 'string') {
+      // Limpia el string de comentarios y caracteres raros
+      const rawData = req.body.replace(/\/\/.*|\/\*[\s\S]*?\*\//g, '').trim();
+      data = JSON.parse(rawData);
+    } else {
+      data = req.body;
+    }
+
+    const { par, cantidadUSD, trailingStopPercent } = data;
 
     // Validaciones
     if (activeTrade) {
@@ -27,14 +36,12 @@ app.post('/alerta', async (req, res) => {
       return res.status(400).json({ error: 'Faltan parámetros (par, cantidadUSD, trailingStopPercent)' });
     }
 
-    // 1. Obtener precio actual del par
+    // Obtener precio actual
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${par}`);
     const currentPrice = parseFloat(ticker.data.result[par].c[0]);
+    const cantidadCrypto = (cantidadUSD / currentPrice).toFixed(8);
 
-    // 2. Calcular la cantidad de cripto a comprar (ej: 50 USD / precio actual)
-    const cantidadCrypto = (cantidadUSD / currentPrice).toFixed(8); // Precisión de 8 decimales
-
-    // 3. Ejecutar compra en Kraken
+    // Ejecutar compra en Kraken
     const order = await kraken.api('AddOrder', {
       pair: par,
       type: 'buy',
@@ -42,7 +49,7 @@ app.post('/alerta', async (req, res) => {
       volume: cantidadCrypto
     });
 
-    // 4. Registrar el trade
+    // Registrar el trade
     activeTrade = {
       par,
       quantity: cantidadCrypto,
@@ -60,7 +67,7 @@ app.post('/alerta', async (req, res) => {
   }
 });
 
-// Función de trailing stop (sin cambios)
+// Función de trailing stop
 async function checkTrailingStop() {
   if (!activeTrade) return;
 
@@ -69,11 +76,13 @@ async function checkTrailingStop() {
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${par}`);
     const currentPrice = parseFloat(ticker.data.result[par].c[0]);
 
+    // Actualizar precio máximo
     activeTrade.highestPrice = Math.max(highestPrice, currentPrice);
     const stopPrice = activeTrade.highestPrice * (1 - (trailingStopPercent / 100));
 
     console.log(`📊 ${par} | Precio: ${currentPrice} | Máx: ${activeTrade.highestPrice} | Stop: ${stopPrice}`);
 
+    // Vender si se activa el trailing stop
     if (currentPrice <= stopPrice) {
       await kraken.api('AddOrder', {
         pair: par,
