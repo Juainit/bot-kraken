@@ -1,152 +1,266 @@
 const express = require('express');
 const KrakenClient = require('kraken-api');
 const axios = require('axios');
+const dotenv = require('dotenv');
 
+// Configuración inicial
+dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CHECK_INTERVAL = 600000; // 10 minutos
+const CHECK_INTERVAL = process.env.CHECK_INTERVAL || 600000; // 10 minutos por defecto
 
-// → Aquí verificamos las variables de entorno (justo después de definir PORT)
-console.log("🔑 API_KEY:", process.env.API_KEY ? "✅ Cargada" : "❌ Faltante");
-console.log("🔒 API_SECRET:", process.env.API_SECRET ? "✅ Cargada" : "❌ Faltante");
+// Validación de variables de entorno
+const requiredEnvVars = ['API_KEY', 'API_SECRET'];
+const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
+
+if (missingVars.length > 0) {
+  console.error(`❌ [${new Date().toISOString()}] Variables de entorno faltantes: ${missingVars.join(', ')}`);
+  process.exit(1);
+}
+
+console.log(`✅ [${new Date().toISOString()}] Configuración inicial completada`);
 
 const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 
+// Estado del trade
 let activeTrade = null;
 
-// ✨ NUEVO: Función para verificar saldo
+// Middlewares
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Validación de seguridad básica
+app.use((req, res, next) => {
+  res.setHeader('X-Powered-By', 'Kraken Trading Bot');
+  next();
+});
+
+/**
+ * Verifica el saldo disponible para un par de trading
+ */
 async function checkBalance(pair) {
   try {
     const balance = await kraken.api('Balance');
-    const currency = pair.replace('USD', ''); // Ej: SOLUSD → SOL
-    return parseFloat(balance.result[`Z${currency}`] || balance.result[`X${currency}`] || 0);
+    const currency = pair.replace('USD', '');
+    const balanceKey = [`Z${currency}`, `X${currency}`].find(key => balance.result[key]);
+    
+    return parseFloat(balance.result[balanceKey] || 0);
   } catch (error) {
-    console.error('⚠️ Error al verificar saldo:', error.message);
-    return 0;
+    console.error(`⚠️ [${new Date().toISOString()}] Error al verificar saldo: ${error.message}`);
+    throw error;
   }
 }
 
-// Middleware estándar
-app.use(express.json());
+/**
+ * Limpia caracteres inválidos del par de trading
+ */
+function validateTradingPair(pair) {
+  const cleanPair = pair.replace(/[^a-zA-Z0-9]/g, '');
+  if (cleanPair !== pair) {
+    console.warn(`⚠️ [${new Date().toISOString()}] Par corregido: ${pair} → ${cleanPair}`);
+  }
+  return cleanPair;
+}
 
+/**
+ * Calcula la cantidad basada en el precio actual
+ */
+function calculateQuantity(amount, price) {
+  return (amount / price).toFixed(8);
+}
+
+/**
+ * Ejecuta una orden de compra en Kraken
+ */
+async function executeBuyOrder(pair, amount) {
+  try {
+    const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${pair}`);
+    
+    if (!ticker.data.result?.[pair]) {
+      throw new Error(`Par ${pair} no encontrado en Kraken`);
+    }
+
+    const currentPrice = parseFloat(ticker.data.result[pair].c[0]);
+    const quantity = calculateQuantity(amount, currentPrice);
+
+    console.log(`🛒 [${new Date().toISOString()}] Ejecutando orden de compra para ${pair}: ${quantity} @ ${currentPrice}`);
+
+    return await kraken.api('AddOrder', {
+      pair,
+      type: 'buy',
+      ordertype: 'market',
+      volume: quantity.toString()
+    });
+  } catch (error) {
+    console.error(`❌ [${new Date().toISOString()}] Error en executeBuyOrder: ${error.message}`);
+    throw error;
+  }
+}
+
+/**
+ * Ejecuta una orden de venta en Kraken
+ */
+async function executeSellOrder(pair, quantity) {
+  try {
+    console.log(`🛒 [${new Date().toISOString()}] Ejecutando orden de venta para ${pair}: ${quantity}`);
+    
+    return await kraken.api('AddOrder', {
+      pair,
+      type: 'sell',
+      ordertype: 'market',
+      volume: quantity.toString()
+    });
+  } catch (error) {
+    console.error(`❌ [${new Date().toISOString()}] Error en executeSellOrder: ${error.message}`);
+    throw error;
+  }
+}
+
+// Endpoint para recibir alertas
 app.post('/alerta', async (req, res) => {
-  console.log("Body recibido (objeto):", req.body);
-
   try {
     const { par, cantidadUSD, trailingStopPercent } = req.body;
 
+    // Validaciones
     if (activeTrade) {
-      return res.status(400).json({ error: 'Ya hay un trade activo. Vende antes de comprar.' });
+      return res.status(400).json({ 
+        error: 'Ya hay un trade activo', 
+        suggestion: 'Vende el trade actual antes de abrir uno nuevo' 
+      });
     }
+
     if (!par || !cantidadUSD || !trailingStopPercent) {
-      return res.status(400).json({ error: 'Faltan parámetros (par, cantidadUSD, trailingStopPercent)' });
+      return res.status(400).json({ 
+        error: 'Parámetros faltantes',
+        required: ['par', 'cantidadUSD', 'trailingStopPercent']
+      });
     }
 
-    const cleanPair = par.replace(/[^a-zA-Z0-9]/g, '');
-    if (cleanPair !== par) {
-      console.warn(`⚠️ Par corregido: ${par} → ${cleanPair}`);
-    }
+    const cleanPair = validateTradingPair(par);
+    const amount = parseFloat(cantidadUSD);
+    const stopPercent = parseFloat(trailingStopPercent);
 
-    // Verificar si el par existe
-    const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`).catch(e => {
-      throw new Error(`Par ${cleanPair} no válido en Kraken`);
-    });
+    if (isNaN(amount)) throw new Error('cantidadUSD debe ser un número');
+    if (isNaN(stopPercent)) throw new Error('trailingStopPercent debe ser un número');
 
-    if (!ticker.data.result[cleanPair]) {
-      console.error('Contenido recibido de Kraken:', ticker.data);
-      throw new Error(`Par ${cleanPair} no encontrado en Kraken`);
-    }
-
+    // Ejecutar compra
+    const order = await executeBuyOrder(cleanPair, amount);
+    
+    // Configurar trailing stop
+    const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`);
     const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
-    const cantidadCrypto = (cantidadUSD / currentPrice).toFixed(8);
-
-    console.log('🛒 Ejecutando orden de compra con los siguientes datos:');
-    console.log({
-      pair: cleanPair,
-      volume: cantidadCrypto.toString(),
-      cantidadUSD,
-      currentPrice,
-      trailingStopPercent
-    });
-
-    const order = await kraken.api('AddOrder', {
-      pair: cleanPair,
-      type: 'buy',
-      ordertype: 'market',
-      volume: cantidadCrypto.toString()
-    });
-
-    console.log('📥 Respuesta de Kraken tras compra:', order);
 
     activeTrade = {
       par: cleanPair,
-      quantity: cantidadCrypto,
-      trailingStopPercent: parseFloat(trailingStopPercent),
+      quantity: calculateQuantity(amount, currentPrice),
+      trailingStopPercent: stopPercent,
       highestPrice: currentPrice,
-      checkInterval: setInterval(() => checkTrailingStop(), CHECK_INTERVAL)
+      checkInterval: setInterval(checkTrailingStop, CHECK_INTERVAL)
     };
 
-    console.log(`✅ COMPRA: $${cantidadUSD} USD → ${cantidadCrypto} ${cleanPair} | Stop: ${trailingStopPercent}%`);
-    res.status(200).json({ message: 'Compra exitosa' });
+    console.log(`✅ [${new Date().toISOString()}] COMPRA: $${amount} USD → ${activeTrade.quantity} ${cleanPair} | Stop: ${stopPercent}%`);
+
+    res.status(200).json({ 
+      status: 'success',
+      message: 'Compra exitosa',
+      orderId: order.result.txid[0],
+      pair: cleanPair,
+      amount,
+      quantity: activeTrade.quantity
+    });
 
   } catch (error) {
-    console.error('❌ Error en endpoint /alerta:', error.message);
-    res.status(500).json({
+    console.error(`❌ [${new Date().toISOString()}] Error en /alerta: ${error.message}`);
+    res.status(500).json({ 
       error: error.message,
-      suggestion: "Verifica el formato: {'par':'SOLUSD','cantidadUSD':12,'trailingStopPercent':5}"
+      details: error.response?.data || null
     });
   }
 });
 
-// Cálculo Trailing
+/**
+ * Verifica si se debe activar el trailing stop
+ */
 async function checkTrailingStop() {
   if (!activeTrade) return;
 
   try {
     const { par, quantity, trailingStopPercent, highestPrice } = activeTrade;
-    const currentBalance = await checkBalance(par); // Verifica saldo antes de vender
-
+    
+    // Verificar saldo primero
+    const currentBalance = await checkBalance(par);
     if (currentBalance <= 0) {
-      console.log(`⚠️ Sin saldo de ${par}. Trade cancelado.`);
-      clearInterval(activeTrade.checkInterval);
-      activeTrade = null;
+      console.log(`⚠️ [${new Date().toISOString()}] Sin saldo de ${par}. Trade cancelado.`);
+      clearTrade();
       return;
     }
 
-    // Lógica existente de monitoreo de precio
+    // Obtener precio actual
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${par}`);
     const currentPrice = parseFloat(ticker.data.result[par].c[0]);
 
+    // Actualizar precio máximo
     activeTrade.highestPrice = Math.max(highestPrice, currentPrice);
     const stopPrice = activeTrade.highestPrice * (1 - (trailingStopPercent / 100));
 
-    console.log(`📊 ${par} | Precio: ${currentPrice} | Máx: ${activeTrade.highestPrice} | Stop: ${stopPrice}`);
+    console.log(`📊 [${new Date().toISOString()}] ${par} | Precio: ${currentPrice} | Máx: ${activeTrade.highestPrice} | Stop: ${stopPrice}`);
 
+    // Verificar si se debe vender
     if (currentPrice <= stopPrice) {
-      const sellOrder = await kraken.api('AddOrder', {
-        pair: par,
-        type: 'sell',
-        ordertype: 'market',
-        volume: quantity.toString()
-      });
-      clearInterval(activeTrade.checkInterval);
-      console.log(`🚨 VENTA: ${quantity} ${par} | Precio: ${currentPrice} | Orden ID: ${sellOrder.result.txid[0]}`);
-      activeTrade = null;
+      const sellOrder = await executeSellOrder(par, quantity);
+      clearTrade();
+      
+      console.log(`🚨 [${new Date().toISOString()}] VENTA: ${quantity} ${par} | Precio: ${currentPrice} | Orden ID: ${sellOrder.result.txid[0]}`);
     }
   } catch (error) {
-    console.error('⚠️ Error monitoreando:', error.message);
+    console.error(`⚠️ [${new Date().toISOString()}] Error en checkTrailingStop: ${error.message}`);
   }
 }
-// ... Suerte!
 
-app.get('/', (req, res) => {
+/**
+ * Limpia el trade activo
+ */
+function clearTrade() {
+  if (activeTrade?.checkInterval) {
+    clearInterval(activeTrade.checkInterval);
+  }
+  activeTrade = null;
+}
+
+// Endpoint para ver estado
+app.get('/status', (req, res) => {
   res.status(200).json({
-    status: '🚀 Bot activo',
-    endpoints: {
-      alerta: 'POST /alerta',
-      description: 'Envía una alerta de TradingView para comprar en Kraken'
-    }
+    status: 'active',
+    activeTrade,
+    lastChecked: new Date().toISOString()
   });
 });
 
-app.listen(PORT, () => console.log(`Bot activo en puerto ${PORT}`));
+// Endpoint principal
+app.get('/', (req, res) => {
+  res.status(200).json({
+    status: '🚀 Bot activo',
+    endpoints: [
+      { method: 'POST', path: '/alerta', description: 'Recibe alertas de trading' },
+      { method: 'GET', path: '/status', description: 'Obtiene el estado actual del bot' }
+    ],
+    environment: process.env.NODE_ENV || 'development',
+    uptime: process.uptime()
+  });
+});
+
+// Manejo de errores global
+process.on('unhandledRejection', (error) => {
+  console.error(`⚠️ [${new Date().toISOString()}] Unhandled Rejection: ${error.message}`);
+});
+
+process.on('uncaughtException', (error) => {
+  console.error(`⚠️ [${new Date().toISOString()}] Uncaught Exception: ${error.message}`);
+  process.exit(1);
+});
+
+// Iniciar servidor
+app.listen(PORT, () => {
+  console.log(`✅ [${new Date().toISOString()}] Bot activo en puerto ${PORT}`);
+  console.log(`⏱️ [${new Date().toISOString()}] Intervalo de verificación: ${CHECK_INTERVAL/1000} segundos`);
+});
