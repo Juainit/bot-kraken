@@ -14,6 +14,18 @@ const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 
 let activeTrade = null;
 
+// ✨ NUEVO: Función para verificar saldo
+async function checkBalance(pair) {
+  try {
+    const balance = await kraken.api('Balance');
+    const currency = pair.replace('USD', ''); // Ej: SOLUSD → SOL
+    return parseFloat(balance.result[`Z${currency}`] || balance.result[`X${currency}`] || 0);
+  } catch (error) {
+    console.error('⚠️ Error al verificar saldo:', error.message);
+    return 0;
+  }
+}
+
 // Middleware estándar
 app.use(express.json());
 
