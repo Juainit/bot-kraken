@@ -9,44 +9,15 @@ const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 
 let activeTrade = null;
 
-// ===== MIDDLEWARE UNIFICADO PARA PARSING =====
-app.use((req, res, next) => {
-  console.log("Content-Type recibido:", req.headers['content-type']);
-  console.log("Método HTTP:", req.method);
-  
-  if (req.headers['content-type']?.includes('application/json')) {
-    let data = '';
-    req.on('data', chunk => {
-      data += chunk;
-    });
-    req.on('end', () => {
-      try {
-        req.body = JSON.parse(data);
-        next();
-      } catch (e) {
-        console.error("Error al parsear JSON:", e.message);
-        res.status(400).json({ error: 'JSON inválido' });
-      }
-    });
-  } else {
-    express.text({ type: '*/*' })(req, res, next);
-  }
-});
-// ============================================
+// Middleware estándar para parsear JSON correctamente
+app.use(express.json());
 
 app.post('/alerta', async (req, res) => {
-  console.log("Body recibido (objeto):", req.body); // <-- Verificamos el body ya parseado
-  
-  try {
-    // Verificamos que req.body es un objeto válido
-    if (!req.body || typeof req.body !== 'object') {
-      throw new Error('El cuerpo de la solicitud no es un JSON válido');
-    }
+  console.log("Body recibido (objeto):", req.body);
 
-    // Extraemos parámetros directamente del body ya parseado
+  try {
     const { par, cantidadUSD, trailingStopPercent } = req.body;
 
-    // Validaciones básicas
     if (activeTrade) {
       return res.status(400).json({ error: 'Ya hay un trade activo. Vende antes de comprar.' });
     }
@@ -54,13 +25,11 @@ app.post('/alerta', async (req, res) => {
       return res.status(400).json({ error: 'Faltan parámetros (par, cantidadUSD, trailingStopPercent)' });
     }
 
-    // Limpiar y validar el par
     const cleanPair = par.replace(/[^a-zA-Z0-9]/g, '');
     if (cleanPair !== par) {
       console.warn(`⚠️ Par corregido: ${par} → ${cleanPair}`);
     }
 
-    // Verificar si el par existe en Kraken
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`).catch(e => {
       throw new Error(`Par ${cleanPair} no válido en Kraken. ¿Quizás es REQUSD o SOLUSD?`);
     });
@@ -69,7 +38,6 @@ app.post('/alerta', async (req, res) => {
       throw new Error(`Par ${cleanPair} no encontrado en Kraken`);
     }
 
-    // Lógica de compra
     const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
     const cantidadCrypto = (cantidadUSD / currentPrice).toFixed(8);
 
@@ -77,14 +45,14 @@ app.post('/alerta', async (req, res) => {
       pair: cleanPair,
       type: 'buy',
       ordertype: 'market',
-      volume: cantidadCrypto
+      volume: cantidadCrypto.toString()
     });
 
     activeTrade = {
       par: cleanPair,
       quantity: cantidadCrypto,
       trailingStopPercent: parseFloat(trailingStopPercent),
-      highestPrice: parseFloat(order.result.price),
+      highestPrice: currentPrice,
       checkInterval: setInterval(() => checkTrailingStop(), CHECK_INTERVAL)
     };
 
@@ -93,14 +61,13 @@ app.post('/alerta', async (req, res) => {
 
   } catch (error) {
     console.error('❌ Error en endpoint /alerta:', error.message);
-    res.status(500).json({ 
+    res.status(500).json({
       error: error.message,
       suggestion: "Verifica el formato: {'par':'SOLUSD','cantidadUSD':12,'trailingStopPercent':5}"
     });
   }
 });
 
-// Función de trailing stop
 async function checkTrailingStop() {
   if (!activeTrade) return;
 
@@ -109,19 +76,17 @@ async function checkTrailingStop() {
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${par}`);
     const currentPrice = parseFloat(ticker.data.result[par].c[0]);
 
-    // Actualizar precio máximo
     activeTrade.highestPrice = Math.max(highestPrice, currentPrice);
     const stopPrice = activeTrade.highestPrice * (1 - (trailingStopPercent / 100));
 
     console.log(`📊 ${par} | Precio: ${currentPrice} | Máx: ${activeTrade.highestPrice} | Stop: ${stopPrice}`);
 
-    // Vender si se activa el trailing stop
     if (currentPrice <= stopPrice) {
       await kraken.api('AddOrder', {
         pair: par,
         type: 'sell',
         ordertype: 'market',
-        volume: quantity
+        volume: quantity.toString()
       });
       clearInterval(activeTrade.checkInterval);
       console.log(`🚨 VENTA: ${quantity} ${par} | Precio: ${currentPrice}`);
@@ -131,9 +96,9 @@ async function checkTrailingStop() {
     console.error('⚠️ Error monitoreando:', error.message);
   }
 }
-// Añade esto ANTES del app.listen:
+
 app.get('/', (req, res) => {
-  res.status(200).json({ 
+  res.status(200).json({
     status: '🚀 Bot activo',
     endpoints: {
       alerta: 'POST /alerta',
@@ -141,4 +106,5 @@ app.get('/', (req, res) => {
     }
   });
 });
+
 app.listen(PORT, () => console.log(`Bot activo en puerto ${PORT}`));
