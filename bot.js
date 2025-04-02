@@ -5,6 +5,11 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CHECK_INTERVAL = 600000; // 10 minutos
+
+// → Aquí verificamos las variables de entorno (justo después de definir PORT)
+console.log("🔑 API_KEY:", process.env.API_KEY ? "✅ Cargada" : "❌ Faltante");
+console.log("🔒 API_SECRET:", process.env.API_SECRET ? "✅ Cargada" : "❌ Faltante");
+
 const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 
 let activeTrade = null;
