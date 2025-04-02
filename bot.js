@@ -9,7 +9,7 @@ const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 
 let activeTrade = null;
 
-// Middleware estándar para parsear JSON correctamente
+// Middleware estándar
 app.use(express.json());
 
 app.post('/alerta', async (req, res) => {
@@ -30,16 +30,27 @@ app.post('/alerta', async (req, res) => {
       console.warn(`⚠️ Par corregido: ${par} → ${cleanPair}`);
     }
 
+    // Verificar si el par existe
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`).catch(e => {
-      throw new Error(`Par ${cleanPair} no válido en Kraken. ¿Quizás es REQUSD o SOLUSD?`);
+      throw new Error(`Par ${cleanPair} no válido en Kraken`);
     });
 
     if (!ticker.data.result[cleanPair]) {
+      console.error('Contenido recibido de Kraken:', ticker.data);
       throw new Error(`Par ${cleanPair} no encontrado en Kraken`);
     }
 
     const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
     const cantidadCrypto = (cantidadUSD / currentPrice).toFixed(8);
+
+    console.log('🛒 Ejecutando orden de compra con los siguientes datos:');
+    console.log({
+      pair: cleanPair,
+      volume: cantidadCrypto.toString(),
+      cantidadUSD,
+      currentPrice,
+      trailingStopPercent
+    });
 
     const order = await kraken.api('AddOrder', {
       pair: cleanPair,
@@ -47,6 +58,8 @@ app.post('/alerta', async (req, res) => {
       ordertype: 'market',
       volume: cantidadCrypto.toString()
     });
+
+    console.log('📥 Respuesta de Kraken tras compra:', order);
 
     activeTrade = {
       par: cleanPair,
