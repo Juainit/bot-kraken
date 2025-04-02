@@ -11,28 +11,24 @@ let activeTrade = null;
 
 // ===== MIDDLEWARE UNIFICADO PARA PARSING =====
 app.use((req, res, next) => {
-  console.log("Content-Type recibido:", req.headers['content-type']); // <-- AÑADIDO AQUÍ
-  console.log("Método HTTP:", req.method); // <-- Log adicional útil
+  console.log("Content-Type recibido:", req.headers['content-type']);
+  console.log("Método HTTP:", req.method);
   
-  if (req.headers['content-type'] === 'application/json') {
+  if (req.headers['content-type']?.includes('application/json')) {
     let data = '';
     req.on('data', chunk => {
-      console.log("Recibiendo chunk de datos..."); // <-- Para ver el flujo de datos
       data += chunk;
     });
     req.on('end', () => {
       try {
-        console.log("Datos crudos recibidos:", data); // <-- Ver el JSON crudo
         req.body = JSON.parse(data);
-        console.log("Body parseado:", req.body); // <-- Confirmar parsing
         next();
       } catch (e) {
-        console.error("Error al parsear JSON:", e.message); // <-- Detalle del error
+        console.error("Error al parsear JSON:", e.message);
         res.status(400).json({ error: 'JSON inválido' });
       }
     });
   } else {
-    console.log("Usando parser de texto plano...");
     express.text({ type: '*/*' })(req, res, next);
   }
 });
