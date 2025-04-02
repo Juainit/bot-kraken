@@ -98,11 +98,22 @@ app.post('/alerta', async (req, res) => {
   }
 });
 
+// Cálculo Trailing
 async function checkTrailingStop() {
   if (!activeTrade) return;
 
   try {
     const { par, quantity, trailingStopPercent, highestPrice } = activeTrade;
+    const currentBalance = await checkBalance(par); // Verifica saldo antes de vender
+
+    if (currentBalance <= 0) {
+      console.log(`⚠️ Sin saldo de ${par}. Trade cancelado.`);
+      clearInterval(activeTrade.checkInterval);
+      activeTrade = null;
+      return;
+    }
+
+    // Lógica existente de monitoreo de precio
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${par}`);
     const currentPrice = parseFloat(ticker.data.result[par].c[0]);
 
@@ -112,20 +123,21 @@ async function checkTrailingStop() {
     console.log(`📊 ${par} | Precio: ${currentPrice} | Máx: ${activeTrade.highestPrice} | Stop: ${stopPrice}`);
 
     if (currentPrice <= stopPrice) {
-      await kraken.api('AddOrder', {
+      const sellOrder = await kraken.api('AddOrder', {
         pair: par,
         type: 'sell',
         ordertype: 'market',
         volume: quantity.toString()
       });
       clearInterval(activeTrade.checkInterval);
-      console.log(`🚨 VENTA: ${quantity} ${par} | Precio: ${currentPrice}`);
+      console.log(`🚨 VENTA: ${quantity} ${par} | Precio: ${currentPrice} | Orden ID: ${sellOrder.result.txid[0]}`);
       activeTrade = null;
     }
   } catch (error) {
     console.error('⚠️ Error monitoreando:', error.message);
   }
 }
+// ... Suerte!
 
 app.get('/', (req, res) => {
   res.status(200).json({
