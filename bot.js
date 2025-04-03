@@ -33,18 +33,22 @@ function validateTradingPair(pair) {
   if (typeof pair !== 'string') throw new Error('El par debe ser un string');
   
   const cleanPair = pair.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const validCurrencies = ['USD', 'EUR', 'GBP', 'CAD']; // Añade más si necesitas
   
-  if (!cleanPair.endsWith('USD')) {
-    throw new Error('El par debe terminar con USD (ej: SOLUSD)');
+  const endsWithValidCurrency = validCurrencies.some(currency => 
+    cleanPair.endsWith(currency)
+  );
+
+  if (!endsWithValidCurrency) {
+    throw new Error(`El par debe terminar con ${validCurrencies.join(', ')} (ej: SOLEUR, ETHGBP)`);
   }
 
   if (cleanPair.length < 5 || cleanPair.length > 8) {
-    throw new Error('El par debe tener entre 5-8 caracteres (ej: SOLUSD)');
+    throw new Error('El par debe tener entre 5-8 caracteres (ej: SOLEUR)');
   }
 
   return cleanPair;
 }
-
 function calculateQuantity(amount, price) {
   const quantity = amount / price;
   return Math.floor(quantity * 100000000) / 100000000; // 8 decimales
