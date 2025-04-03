@@ -57,29 +57,32 @@ function calculateQuantity(amount, price) {
 // API Endpoints
 app.post('/alerta', async (req, res) => {
   try {
-    const { par, cantidadUSD, trailingStopPercent } = req.body;
+    const { par, cantidad, trailingStopPercent } = req.body; // Cambiado de "cantidadUSD" a "cantidad"
 
-    if (!par || !cantidadUSD || !trailingStopPercent) {
+    // Validación de parámetros
+    if (!par || !cantidad || !trailingStopPercent) {
       return res.status(400).json({ 
-        error: 'Missing parameters',
-        required: ['par', 'cantidadUSD', 'trailingStopPercent']
+        error: 'Parámetros faltantes',
+        required: ['par', 'cantidad', 'trailingStopPercent'] // Actualizado
       });
     }
 
+    // Validar el par y extraer moneda (EUR/USD/GBP/etc.)
     const cleanPair = validateTradingPair(par);
-    const amount = parseFloat(cantidadUSD);
-    const stopPercent = parseFloat(trailingStopPercent);
+    const currency = cleanPair.slice(-3); // Extrae "EUR", "USD", etc.
+    const amount = parseFloat(cantidad);
 
+    // Validar cantidad y trailing stop
     if (isNaN(amount) || amount <= 0) {
-      throw new Error('cantidadUSD debe ser un número positivo');
+      throw new Error('"cantidad" debe ser un número positivo');
     }
 
-    if (isNaN(stopPercent) || stopPercent <= 0 || stopPercent >= 100) {
-      throw new Error('trailingStopPercent debe ser un número entre 0 y 100');
+    if (isNaN(trailingStopPercent) || trailingStopPercent <= 0 || trailingStopPercent >= 100) {
+      throw new Error('"trailingStopPercent" debe ser entre 0 y 100');
     }
 
+    // Obtener precio actual
     const tickerResponse = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`);
-    
     if (!tickerResponse.data.result || !tickerResponse.data.result[cleanPair]) {
       throw new Error(`Par ${cleanPair} no válido`);
     }
@@ -87,6 +90,7 @@ app.post('/alerta', async (req, res) => {
     const currentPrice = parseFloat(tickerResponse.data.result[cleanPair].c[0]);
     const quantity = calculateQuantity(amount, currentPrice);
 
+    // Ejecutar orden de compra
     const order = await kraken.api('AddOrder', {
       pair: cleanPair,
       type: 'buy',
@@ -94,22 +98,24 @@ app.post('/alerta', async (req, res) => {
       volume: quantity.toString()
     });
 
+    // Registrar la operación activa
     activeTrade = {
       pair: cleanPair,
       quantity,
-      stopPercent,
+      stopPercent: parseFloat(trailingStopPercent),
       highestPrice: currentPrice,
       checkInterval: setInterval(checkTrailingStop, CHECK_INTERVAL)
     };
 
-    console.log(`✅ [${new Date().toISOString()}] COMPRA: ${quantity} ${cleanPair} @ ${currentPrice}`);
+    console.log(`✅ [${new Date().toISOString()}] COMPRA: ${quantity} ${cleanPair} @ ${currentPrice} ${currency}`);
 
     return res.status(200).json({
       status: 'success',
       orderId: order.result.txid[0],
       pair: cleanPair,
       quantity,
-      price: currentPrice
+      price: currentPrice,
+      currency // Añadido para claridad
     });
 
   } catch (error) {
