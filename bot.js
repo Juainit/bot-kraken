@@ -92,8 +92,13 @@ app.post('/alerta', async (req, res) => {
     const currency = cleanPair.slice(-3);
     const amount = parseFloat(cantidad);
 
-    if (isNaN(amount) throw new Error('"cantidad" debe ser un número');
-    if (isNaN(trailingStopPercent)) throw new Error('"trailingStopPercent" debe ser un número');
+        if (isNaN(amount) || amount <= 0) {
+      throw new Error('"cantidad" debe ser un número positivo');
+    }
+
+    if (isNaN(trailingStopPercent) || trailingStopPercent <= 0 || trailingStopPercent >= 100) {
+      throw new Error('"trailingStopPercent" debe ser entre 0 y 100');
+    }
 
     // Obtener precio actual
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`);
@@ -162,7 +167,7 @@ async function checkTrade(trade) {
     }
     
     // Calcular precio de venta
-    const stopPrice = newHighestPrice * (1 - (trade.stopPercent / 100));
+    const stopPrice = newHighestPrice * (1 - trade.stopPercent / 100);
     
     if (currentPrice <= stopPrice) {
       // Ejecutar venta
