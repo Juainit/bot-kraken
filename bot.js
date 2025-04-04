@@ -10,7 +10,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 600000; // 10 minutos
-const DB_PATH = path.join(__dirname, 'trades.db'); // Archivo de base de datos
+const DB_PATH = '/data/trades.db'; // ← NUEVA LÍNEA (usa esta)
 
 // Validación de variables de entorno
 const requiredEnvVars = ['API_KEY', 'API_SECRET'];
