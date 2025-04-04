@@ -202,6 +202,22 @@ app.get('/status', (req, res) => {
   });
 });
 
+// 1. Endpoint para trades activos
+app.get('/trades/active', (req, res) => {
+  db.all("SELECT * FROM trades WHERE status = 'active'", (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.status(200).json(rows);
+  });
+});
+
+// 2. Endpoint para historial de trades
+app.get('/trades/history', (req, res) => {
+  db.all("SELECT * FROM trades WHERE status = 'completed' ORDER BY createdAt DESC", (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.status(200).json(rows);
+  });
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`🚀 [${new Date().toISOString()}] Server running on port ${PORT}`);
