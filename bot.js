@@ -230,7 +230,7 @@ app.get('/balance', async (req, res) => {
   }
 });
 
-// 4. Endpoint para ejecutar una venta manual usando % del saldo disponible
+// 4. Endpoint para ejecutar una venta manual usando % del saldo disponible y guardarla en BD
 app.post('/vender', async (req, res) => {
   try {
     const { par, cantidad } = req.body;
@@ -269,6 +269,10 @@ app.post('/vender', async (req, res) => {
       throw new Error(`La cantidad a vender es demasiado baja`);
     }
 
+    // Obtener precio actual
+    const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`);
+    const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
+
     // Ejecutar orden de venta
     const order = await kraken.api('AddOrder', {
       pair: cleanPair,
@@ -277,11 +281,24 @@ app.post('/vender', async (req, res) => {
       volume: volume.toString()
     });
 
+    const orderId = order.result.txid[0];
+
+    // Guardar la venta en la base de datos con status manual
+    db.run(
+      `INSERT INTO trades (
+        pair, quantity, stopPercent, highestPrice, buyPrice, buyOrderId, status
+      ) VALUES (?, ?, NULL, NULL, NULL, ?, 'manual')`,
+      [cleanPair, volume, orderId],
+      function (err) {
+        if (err) console.error('Error al guardar venta manual en BD:', err);
+      }
+    );
+
     console.log(`💥 [${new Date().toISOString()}] VENTA MANUAL: ${volume} ${baseAsset} (${percent}%) en ${cleanPair}`);
-    
+
     res.status(200).json({
       status: 'venta ejecutada',
-      orderId: order.result.txid[0],
+      orderId,
       pair: cleanPair,
       baseAsset,
       cantidadVendida: volume,
@@ -293,6 +310,7 @@ app.post('/vender', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`🚀 [${new Date().toISOString()}] Server running on port ${PORT}`);
