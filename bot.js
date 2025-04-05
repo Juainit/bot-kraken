@@ -42,18 +42,30 @@ db.serialize(() => {
     )
   `);
 
-  // Añadir columnas solo si no existen
+  // Añadir columnas si no existen y actualizar registros antiguos
   db.all("PRAGMA table_info(trades)", (err, columns) => {
     if (err) return console.error('❌ Error al leer columnas:', err);
+
     const columnNames = columns.map(col => col.name);
 
     if (!columnNames.includes('sellPrice')) {
       db.run("ALTER TABLE trades ADD COLUMN sellPrice REAL");
     }
+
     if (!columnNames.includes('profitPercent')) {
       db.run("ALTER TABLE trades ADD COLUMN profitPercent REAL");
     }
 
+    db.all("SELECT * FROM trades WHERE status = 'completed' AND profitPercent IS NULL AND sellPrice IS NOT NULL AND buyPrice IS NOT NULL", (err, rows) => {
+      if (err) return console.error('❌ Error al actualizar profitPercent:', err);
+      rows.forEach(row => {
+        const profit = ((row.sellPrice - row.buyPrice) / row.buyPrice) * 100;
+        db.run("UPDATE trades SET profitPercent = ? WHERE id = ?", [profit, row.id]);
+        console.log(`📈 Trade ID ${row.id} actualizado con profitPercent: ${profit.toFixed(2)}%`);
+      });
+    });
+  });
+});
     // Actualizar registros antiguos que no tienen profitPercent
     db.all("SELECT * FROM trades WHERE status = 'completed' AND profitPercent IS NULL AND sellPrice IS NOT NULL AND buyPrice IS NOT NULL", (err, rows) => {
       if (err) return console.error('❌ Error al actualizar profitPercent:', err);
