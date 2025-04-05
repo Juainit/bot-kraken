@@ -10,7 +10,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 600000; // 10 minutos
-const DB_PATH = '/data/trades.db'; // ← NUEVA LÍNEA (usa esta)
+const DB_PATH = '/data/trades.db';
 
 // Validación de variables de entorno
 const requiredEnvVars = ['API_KEY', 'API_SECRET'];
@@ -31,10 +31,12 @@ db.serialize(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pair TEXT NOT NULL,
       quantity REAL NOT NULL,
-      stopPercent REAL NOT NULL,
-      highestPrice REAL NOT NULL,
-      buyPrice REAL NOT NULL,
+      stopPercent REAL,
+      highestPrice REAL,
+      buyPrice REAL,
       buyOrderId TEXT NOT NULL,
+      sellPrice REAL,
+      profitPercent REAL,
       status TEXT DEFAULT 'active',
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
@@ -51,11 +53,11 @@ app.use((req, res, next) => {
 // Helper Functions
 function validateTradingPair(pair) {
   if (typeof pair !== 'string') throw new Error('El par debe ser un string');
-  
+
   const cleanPair = pair.toUpperCase().replace(/[^A-Z0-9]/g, '');
   const validCurrencies = ['USD', 'EUR', 'GBP', 'CAD', 'USDT'];
-  
-  const endsWithValidCurrency = validCurrencies.some(currency => 
+
+  const endsWithValidCurrency = validCurrencies.some(currency =>
     cleanPair.endsWith(currency)
   );
 
@@ -80,9 +82,8 @@ app.post('/alerta', async (req, res) => {
   try {
     const { par, cantidad, trailingStopPercent } = req.body;
 
-    // Validación de parámetros
     if (!par || !cantidad || !trailingStopPercent) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         error: 'Parámetros faltantes',
         required: ['par', 'cantidad', 'trailingStopPercent']
       });
@@ -92,7 +93,7 @@ app.post('/alerta', async (req, res) => {
     const currency = cleanPair.slice(-3);
     const amount = parseFloat(cantidad);
 
-        if (isNaN(amount) || amount <= 0) {
+    if (isNaN(amount) || amount <= 0) {
       throw new Error('"cantidad" debe ser un número positivo');
     }
 
@@ -100,12 +101,10 @@ app.post('/alerta', async (req, res) => {
       throw new Error('"trailingStopPercent" debe ser entre 0 y 100');
     }
 
-    // Obtener precio actual
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`);
     const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
     const quantity = calculateQuantity(amount, currentPrice);
 
-    // Ejecutar orden de compra
     const order = await kraken.api('AddOrder', {
       pair: cleanPair,
       type: 'buy',
@@ -113,7 +112,6 @@ app.post('/alerta', async (req, res) => {
       volume: quantity.toString()
     });
 
-    // Guardar en la base de datos
     db.run(
       `INSERT INTO trades (pair, quantity, stopPercent, highestPrice, buyPrice, buyOrderId) 
        VALUES (?, ?, ?, ?, ?, ?)`,
@@ -140,50 +138,43 @@ app.post('/alerta', async (req, res) => {
   }
 });
 
-// Verificar trades activos periódicamente
 setInterval(() => {
   db.all("SELECT * FROM trades WHERE status = 'active'", (err, trades) => {
     if (err) return console.error('Error al leer trades:', err);
-    
+
     trades.forEach(trade => {
       checkTrade(trade);
     });
   });
 }, CHECK_INTERVAL);
 
-// Función para verificar un trade
 async function checkTrade(trade) {
   try {
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${trade.pair}`);
     const currentPrice = parseFloat(ticker.data.result[trade.pair].c[0]);
-    
-    // Actualizar precio máximo
+
     const newHighestPrice = Math.max(trade.highestPrice, currentPrice);
     if (newHighestPrice > trade.highestPrice) {
-      db.run(
-        "UPDATE trades SET highestPrice = ? WHERE id = ?",
-        [newHighestPrice, trade.id]
-      );
+      db.run("UPDATE trades SET highestPrice = ? WHERE id = ?", [newHighestPrice, trade.id]);
     }
-    
-    // Calcular precio de venta
+
     const stopPrice = newHighestPrice * (1 - trade.stopPercent / 100);
-    
+
     if (currentPrice <= stopPrice) {
-      // Ejecutar venta
       const sellOrder = await kraken.api('AddOrder', {
         pair: trade.pair,
         type: 'sell',
         ordertype: 'market',
         volume: trade.quantity.toString()
       });
-      
-      // Marcar como completado
+
+      const profitPercent = ((currentPrice - trade.buyPrice) / trade.buyPrice) * 100;
+
       db.run(
-        "UPDATE trades SET status = 'completed' WHERE id = ?",
-        [trade.id]
+        "UPDATE trades SET status = 'completed', sellPrice = ?, profitPercent = ? WHERE id = ?",
+        [currentPrice, profitPercent, trade.id]
       );
-      
+
       console.log(`💰 [${new Date().toISOString()}] VENTA: ${trade.quantity} ${trade.pair} @ ${currentPrice}`);
     }
   } catch (error) {
@@ -191,7 +182,6 @@ async function checkTrade(trade) {
   }
 }
 
-// Health Check
 app.get('/status', (req, res) => {
   db.get("SELECT COUNT(*) as active FROM trades WHERE status = 'active'", (err, row) => {
     res.status(200).json({
@@ -202,7 +192,6 @@ app.get('/status', (req, res) => {
   });
 });
 
-// 1. Endpoint para trades activos
 app.get('/trades/active', (req, res) => {
   db.all("SELECT * FROM trades WHERE status = 'active'", (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -210,7 +199,6 @@ app.get('/trades/active', (req, res) => {
   });
 });
 
-// 2. Endpoint para historial de trades
 app.get('/trades/history', (req, res) => {
   db.all("SELECT * FROM trades WHERE status = 'completed' ORDER BY createdAt DESC", (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -218,11 +206,10 @@ app.get('/trades/history', (req, res) => {
   });
 });
 
-// 3. Endpoint para ver el balance actual
 app.get('/balance', async (req, res) => {
   try {
     const balance = await kraken.api('Balance');
-    console.log(`💰 Balance Kraken:`, balance.result); // También lo logueamos en Railway
+    console.log(`💰 Balance Kraken:`, balance.result);
     res.status(200).json(balance.result);
   } catch (error) {
     console.error(`❌ Error obteniendo balance: ${error.message}`);
@@ -230,7 +217,6 @@ app.get('/balance', async (req, res) => {
   }
 });
 
-// 4. Endpoint para ejecutar una venta manual usando % del saldo disponible y guardarla en BD
 app.post('/vender', async (req, res) => {
   try {
     const { par, cantidad } = req.body;
@@ -249,19 +235,14 @@ app.post('/vender', async (req, res) => {
       throw new Error('"cantidad" debe ser un porcentaje entre 0 y 100');
     }
 
-    // Obtener saldo de Kraken
     const balance = await kraken.api('Balance');
-
-    // Detectar el activo base (ej: ZEC en ZECUSD)
     const baseAsset = cleanPair.slice(0, cleanPair.length - 3);
-
     const available = parseFloat(balance.result[baseAsset] || '0');
 
     if (available === 0) {
       throw new Error(`No tienes saldo disponible de ${baseAsset}`);
     }
 
-    // Calcular volumen a vender
     const amountToSell = (available * percent) / 100;
     const volume = Math.floor(amountToSell * 100000000) / 100000000;
 
@@ -269,11 +250,9 @@ app.post('/vender', async (req, res) => {
       throw new Error(`La cantidad a vender es demasiado baja`);
     }
 
-    // Obtener precio actual
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`);
     const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
 
-    // Ejecutar orden de venta
     const order = await kraken.api('AddOrder', {
       pair: cleanPair,
       type: 'sell',
@@ -283,12 +262,11 @@ app.post('/vender', async (req, res) => {
 
     const orderId = order.result.txid[0];
 
-    // Guardar la venta en la base de datos con status manual
     db.run(
       `INSERT INTO trades (
-        pair, quantity, stopPercent, highestPrice, buyPrice, buyOrderId, status
-      ) VALUES (?, ?, NULL, NULL, NULL, ?, 'manual')`,
-      [cleanPair, volume, orderId],
+        pair, quantity, stopPercent, highestPrice, buyPrice, buyOrderId, sellPrice, profitPercent, status
+      ) VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, 'manual')`,
+      [cleanPair, volume, orderId, currentPrice, 0],
       function (err) {
         if (err) console.error('Error al guardar venta manual en BD:', err);
       }
@@ -311,7 +289,6 @@ app.post('/vender', async (req, res) => {
   }
 });
 
-// 5. Endpoint para ver todos los registros de la base de datos
 app.get('/trades/all', (req, res) => {
   db.all("SELECT * FROM trades ORDER BY createdAt DESC", (err, rows) => {
     if (err) return res.status(500).json({ error: err.message });
@@ -319,11 +296,9 @@ app.get('/trades/all', (req, res) => {
   });
 });
 
-// Start Server
 app.listen(PORT, () => {
   console.log(`🚀 [${new Date().toISOString()}] Server running on port ${PORT}`);
-  
-  // Verificar trades activos al iniciar
+
   db.get("SELECT COUNT(*) as count FROM trades WHERE status = 'active'", (err, row) => {
     if (row && row.count > 0) {
       console.log(`🔍 [${new Date().toISOString()}] ${row.count} trades activos encontrados`);
