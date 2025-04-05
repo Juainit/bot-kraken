@@ -218,6 +218,18 @@ app.get('/trades/history', (req, res) => {
   });
 });
 
+// 3. Endpoint para ver el balance actual
+app.get('/balance', async (req, res) => {
+  try {
+    const balance = await kraken.api('Balance');
+    console.log(`💰 Balance Kraken:`, balance.result); // También lo logueamos en Railway
+    res.status(200).json(balance.result);
+  } catch (error) {
+    console.error(`❌ Error obteniendo balance: ${error.message}`);
+    res.status(500).json({ error: 'Error obteniendo balance' });
+  }
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`🚀 [${new Date().toISOString()}] Server running on port ${PORT}`);
