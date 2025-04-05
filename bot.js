@@ -42,8 +42,16 @@ db.serialize(() => {
     )
   `);
 
-  db.run("ALTER TABLE trades ADD COLUMN sellPrice REAL", () => {});
-  db.run("ALTER TABLE trades ADD COLUMN profitPercent REAL", () => {});
+db.run("PRAGMA table_info(trades)", (err, columns) => {
+  const columnNames = columns.map(col => col.name);
+  
+  if (!columnNames.includes('sellPrice')) {
+    db.run("ALTER TABLE trades ADD COLUMN sellPrice REAL");
+  }
+  if (!columnNames.includes('profitPercent')) {
+    db.run("ALTER TABLE trades ADD COLUMN profitPercent REAL");
+  }
+});
 
   // Actualizar registros antiguos
   db.all("SELECT * FROM trades WHERE status = 'completed' AND profitPercent IS NULL AND sellPrice IS NOT NULL AND buyPrice IS NOT NULL", (err, rows) => {
