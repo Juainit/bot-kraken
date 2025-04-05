@@ -311,6 +311,14 @@ app.post('/vender', async (req, res) => {
   }
 });
 
+// 5. Endpoint para ver todos los registros de la base de datos
+app.get('/trades/all', (req, res) => {
+  db.all("SELECT * FROM trades ORDER BY createdAt DESC", (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.status(200).json(rows);
+  });
+});
+
 // Start Server
 app.listen(PORT, () => {
   console.log(`🚀 [${new Date().toISOString()}] Server running on port ${PORT}`);
