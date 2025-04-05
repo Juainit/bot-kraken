@@ -230,6 +230,69 @@ app.get('/balance', async (req, res) => {
   }
 });
 
+// 4. Endpoint para ejecutar una venta manual usando % del saldo disponible
+app.post('/vender', async (req, res) => {
+  try {
+    const { par, cantidad } = req.body;
+
+    if (!par || !cantidad) {
+      return res.status(400).json({
+        error: 'Parámetros faltantes',
+        required: ['par', 'cantidad (% del saldo disponible)']
+      });
+    }
+
+    const cleanPair = validateTradingPair(par);
+    const percent = parseFloat(cantidad);
+
+    if (isNaN(percent) || percent <= 0 || percent > 100) {
+      throw new Error('"cantidad" debe ser un porcentaje entre 0 y 100');
+    }
+
+    // Obtener saldo de Kraken
+    const balance = await kraken.api('Balance');
+
+    // Detectar el activo base (ej: ZEC en ZECUSD)
+    const baseAsset = cleanPair.slice(0, cleanPair.length - 3);
+
+    const available = parseFloat(balance.result[baseAsset] || '0');
+
+    if (available === 0) {
+      throw new Error(`No tienes saldo disponible de ${baseAsset}`);
+    }
+
+    // Calcular volumen a vender
+    const amountToSell = (available * percent) / 100;
+    const volume = Math.floor(amountToSell * 100000000) / 100000000;
+
+    if (volume <= 0) {
+      throw new Error(`La cantidad a vender es demasiado baja`);
+    }
+
+    // Ejecutar orden de venta
+    const order = await kraken.api('AddOrder', {
+      pair: cleanPair,
+      type: 'sell',
+      ordertype: 'market',
+      volume: volume.toString()
+    });
+
+    console.log(`💥 [${new Date().toISOString()}] VENTA MANUAL: ${volume} ${baseAsset} (${percent}%) en ${cleanPair}`);
+    
+    res.status(200).json({
+      status: 'venta ejecutada',
+      orderId: order.result.txid[0],
+      pair: cleanPair,
+      baseAsset,
+      cantidadVendida: volume,
+      porcentaje: percent
+    });
+
+  } catch (error) {
+    console.error(`❌ [${new Date().toISOString()}] Error al vender: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
 // Start Server
 app.listen(PORT, () => {
   console.log(`🚀 [${new Date().toISOString()}] Server running on port ${PORT}`);
