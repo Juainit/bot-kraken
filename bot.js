@@ -53,7 +53,7 @@ function validateTradingPair(pair) {
   if (typeof pair !== 'string') throw new Error('El par debe ser un string');
   
   const cleanPair = pair.toUpperCase().replace(/[^A-Z0-9]/g, '');
-  const validCurrencies = ['USD', 'EUR', 'GBP', 'CAD'];
+  const validCurrencies = ['USD', 'EUR', 'GBP', 'CAD', 'USDT'];
   
   const endsWithValidCurrency = validCurrencies.some(currency => 
     cleanPair.endsWith(currency)
