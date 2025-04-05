@@ -35,12 +35,14 @@ db.serialize(() => {
       highestPrice REAL,
       buyPrice REAL,
       buyOrderId TEXT NOT NULL,
-      sellPrice REAL,
-      profitPercent REAL,
       status TEXT DEFAULT 'active',
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // ← Añade estas dos líneas para migrar sin perder tus datos
+  db.run("ALTER TABLE trades ADD COLUMN sellPrice REAL", () => {});
+  db.run("ALTER TABLE trades ADD COLUMN profitPercent REAL", () => {});
 });
 
 app.use(express.json());
