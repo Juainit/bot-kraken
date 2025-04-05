@@ -42,16 +42,13 @@ db.serialize(() => {
     )
   `);
 
-  // Añadir columnas si no existen y actualizar registros antiguos
   db.all("PRAGMA table_info(trades)", (err, columns) => {
     if (err) return console.error('❌ Error al leer columnas:', err);
-
     const columnNames = columns.map(col => col.name);
 
     if (!columnNames.includes('sellPrice')) {
       db.run("ALTER TABLE trades ADD COLUMN sellPrice REAL");
     }
-
     if (!columnNames.includes('profitPercent')) {
       db.run("ALTER TABLE trades ADD COLUMN profitPercent REAL");
     }
@@ -65,33 +62,6 @@ db.serialize(() => {
       });
     });
   });
-});
-    // Actualizar registros antiguos que no tienen profitPercent
-    db.all("SELECT * FROM trades WHERE status = 'completed' AND profitPercent IS NULL AND sellPrice IS NOT NULL AND buyPrice IS NOT NULL", (err, rows) => {
-      if (err) return console.error('❌ Error al actualizar profitPercent:', err);
-      rows.forEach(row => {
-        const profit = ((row.sellPrice - row.buyPrice) / row.buyPrice) * 100;
-        db.run("UPDATE trades SET profitPercent = ? WHERE id = ?", [profit, row.id]);
-        console.log(`📈 Trade ID ${row.id} actualizado con profitPercent: ${profit.toFixed(2)}%`);
-      });
-    });
-  });
-});
-
-  // Actualizar registros antiguos
-  db.all("SELECT * FROM trades WHERE status = 'completed' AND profitPercent IS NULL AND sellPrice IS NOT NULL AND buyPrice IS NOT NULL", (err, rows) => {
-    if (err) return console.error('❌ Error al actualizar profitPercent:', err);
-    rows.forEach(row => {
-      const profit = ((row.sellPrice - row.buyPrice) / row.buyPrice) * 100;
-      db.run("UPDATE trades SET profitPercent = ? WHERE id = ?", [profit, row.id]);
-      console.log(`📈 Trade ID ${row.id} actualizado con profitPercent: ${profit.toFixed(2)}%`);
-    });
-  });
-});
-
-  // ← Añade estas dos líneas para migrar sin perder tus datos
-  db.run("ALTER TABLE trades ADD COLUMN sellPrice REAL", () => {});
-  db.run("ALTER TABLE trades ADD COLUMN profitPercent REAL", () => {});
 });
 
 app.use(express.json());
@@ -218,7 +188,7 @@ app.post('/vender', async (req, res) => {
     if (available === 0) throw new Error(`No tienes saldo disponible de ${baseAsset}`);
     const amountToSell = (available * percent) / 100;
     const volume = Math.floor(amountToSell * 100000000) / 100000000;
-    if (volume <= 0) throw new Error(`La cantidad a vender es demasiado baja`);
+    if (volume <= 0) throw new Error('La cantidad a vender es demasiado baja');
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`);
     const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
     const order = await kraken.api('AddOrder', { pair: cleanPair, type: 'sell', ordertype: 'market', volume: volume.toString() });
