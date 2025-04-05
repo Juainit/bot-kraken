@@ -24,7 +24,7 @@ if (missingVars.length > 0) {
 const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 const db = new sqlite3.Database(DB_PATH);
 
-// Crear tabla para guardar los trades
+// Crear tabla y migrar si es necesario
 db.serialize(() => {
   db.run(`
     CREATE TABLE IF NOT EXISTS trades (
@@ -35,10 +35,26 @@ db.serialize(() => {
       highestPrice REAL,
       buyPrice REAL,
       buyOrderId TEXT NOT NULL,
+      sellPrice REAL,
+      profitPercent REAL,
       status TEXT DEFAULT 'active',
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  db.run("ALTER TABLE trades ADD COLUMN sellPrice REAL", () => {});
+  db.run("ALTER TABLE trades ADD COLUMN profitPercent REAL", () => {});
+
+  // Actualizar registros antiguos
+  db.all("SELECT * FROM trades WHERE status = 'completed' AND profitPercent IS NULL AND sellPrice IS NOT NULL AND buyPrice IS NOT NULL", (err, rows) => {
+    if (err) return console.error('❌ Error al actualizar profitPercent:', err);
+    rows.forEach(row => {
+      const profit = ((row.sellPrice - row.buyPrice) / row.buyPrice) * 100;
+      db.run("UPDATE trades SET profitPercent = ? WHERE id = ?", [profit, row.id]);
+      console.log(`📈 Trade ID ${row.id} actualizado con profitPercent: ${profit.toFixed(2)}%`);
+    });
+  });
+});
 
   // ← Añade estas dos líneas para migrar sin perder tus datos
   db.run("ALTER TABLE trades ADD COLUMN sellPrice REAL", () => {});
