@@ -209,6 +209,18 @@ app.get('/trades/all', (req, res) => {
   });
 });
 
+// ⚠️ Endpoint temporal para eliminar un trade por ID
+app.delete('/trades/delete/:id', (req, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
+
+  db.run("DELETE FROM trades WHERE id = ?", [id], function(err) {
+    if (err) return res.status(500).json({ error: err.message });
+    if (this.changes === 0) return res.status(404).json({ error: 'Trade no encontrado' });
+    res.status(200).json({ status: 'Trade eliminado', id });
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   db.get("SELECT COUNT(*) as count FROM trades WHERE status = 'active'", (err, row) => {
