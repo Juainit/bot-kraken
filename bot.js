@@ -182,20 +182,51 @@ app.post('/vender', async (req, res) => {
     const cleanPair = validateTradingPair(par);
     const percent = parseFloat(cantidad);
     if (isNaN(percent) || percent <= 0 || percent > 100) throw new Error('"cantidad" debe ser un porcentaje entre 0 y 100');
+    
+    // 1. Busca el trade activo para este par
+    const activeTrade = await db.get(
+      "SELECT * FROM trades WHERE pair = ? AND status = 'active' LIMIT 1",
+      [cleanPair]
+    );
+    if (!activeTrade) throw new Error(`No hay trades activos para ${cleanPair}`);
+
+    // 2. Verifica balance y calcula volumen
     const balance = await kraken.api('Balance');
-    const baseAsset = cleanPair.slice(0, cleanPair.length - 3);
+    const baseAsset = cleanPair.slice(0, -3); // "ACH" de "ACHEUR"
     const available = parseFloat(balance.result[baseAsset] || '0');
-    if (available === 0) throw new Error(`No tienes saldo disponible de ${baseAsset}`);
-    const amountToSell = (available * percent) / 100;
-    const volume = Math.floor(amountToSell * 100000000) / 100000000;
-    if (volume <= 0) throw new Error('La cantidad a vender es demasiado baja');
+    const volume = Math.floor((available * percent / 100) * 100000000) / 100000000;
+    if (volume <= 0) throw new Error('Cantidad a vender demasiado baja');
+
+    // 3. Ejecuta venta en Kraken
     const ticker = await axios.get(`https://api.kraken.com/0/public/Ticker?pair=${cleanPair}`);
     const currentPrice = parseFloat(ticker.data.result[cleanPair].c[0]);
-    const order = await kraken.api('AddOrder', { pair: cleanPair, type: 'sell', ordertype: 'market', volume: volume.toString() });
-    const orderId = order.result.txid[0];
-    db.run(`INSERT INTO trades (pair, quantity, stopPercent, highestPrice, buyPrice, buyOrderId, sellPrice, profitPercent, status) VALUES (?, ?, NULL, NULL, NULL, ?, ?, ?, 'manual')`, [cleanPair, volume, orderId, currentPrice, 0]);
+    const order = await kraken.api('AddOrder', {
+      pair: cleanPair,
+      type: 'sell',
+      ordertype: 'market',
+      volume: volume.toString()
+    });
+
+    // 4. Actualiza el trade existente (DIFERENCIA CLAVE)
+    const profitPercent = ((currentPrice - activeTrade.buyPrice) / activeTrade.buyPrice) * 100;
+    await db.run(
+      `UPDATE trades 
+       SET status = 'completed', 
+           sellPrice = ?,
+           profitPercent = ?
+       WHERE id = ?`,
+      [currentPrice, profitPercent, activeTrade.id]
+    );
+
     console.log(`💥 VENTA MANUAL: ${volume} ${baseAsset} (${percent}%) en ${cleanPair}`);
-    res.status(200).json({ status: 'venta ejecutada', orderId, pair: cleanPair, baseAsset, cantidadVendida: volume, porcentaje: percent });
+    res.status(200).json({
+      status: 'venta ejecutada',
+      orderId: order.result.txid[0],
+      pair: cleanPair,
+      baseAsset,
+      cantidadVendida: volume,
+      porcentaje: percent
+    });
   } catch (error) {
     console.error(`❌ Error al vender: ${error.message}`);
     res.status(500).json({ error: error.message });
