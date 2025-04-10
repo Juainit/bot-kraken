@@ -264,7 +264,7 @@ app.delete('/trades/delete/:id', (req, res) => {
   });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
   db.get("SELECT COUNT(*) as count FROM trades WHERE status = 'active'", (err, row) => {
     if (row && row.count > 0) console.log(`🔍 ${row.count} trades activos encontrados`);
