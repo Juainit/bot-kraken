@@ -24,6 +24,18 @@ if (missingVars.length > 0) {
 const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
 const db = new sqlite3.Database(DB_PATH);
 
+// Manejo de cierre limpio
+process.on('SIGTERM', () => {
+  console.log('🛑 Recibió SIGTERM. Cerrando limpiamente...');
+  db.close((err) => { 
+    if (err) console.error('Error al cerrar DB:', err);
+  });
+  server.close(() => {
+    console.log('Servidor HTTP detenido');
+    process.exit(0);
+  });
+});
+
 // Crear tabla y migrar si es necesario
 db.serialize(() => {
   db.run(`
