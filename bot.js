@@ -102,6 +102,19 @@ app.post('/alerta', async (req, res) => {
     const { par, cantidad, trailingStopPercent } = req.body;
     if (!par || !cantidad || !trailingStopPercent) return res.status(400).json({ error: 'Parámetros faltantes' });
     const cleanPair = validateTradingPair(par);
+
+    // Verificar si ya hay un trade activo para este par
+const existingTrade = await new Promise((resolve, reject) => {
+  db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' LIMIT 1", [cleanPair], (err, row) => {
+    if (err) return reject(err);
+    resolve(row);
+  });
+});
+
+if (existingTrade) {
+  console.log(`⚠️ Trade activo ya existente para ${cleanPair}. Se omite la compra.`);
+  return res.status(200).json({ status: 'skip', message: `Trade ya activo para ${cleanPair}` });
+}
     const currency = cleanPair.slice(-3);
     const amount = parseFloat(cantidad);
     if (isNaN(amount) || amount <= 0) throw new Error('"cantidad" debe ser un número positivo');
