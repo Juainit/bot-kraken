@@ -88,7 +88,7 @@ function validateTradingPair(pair) {
   const validCurrencies = ['USD', 'EUR', 'GBP', 'CAD', 'USDT'];
   const endsWithValidCurrency = validCurrencies.some(currency => cleanPair.endsWith(currency));
   if (!endsWithValidCurrency) throw new Error(`El par debe terminar con ${validCurrencies.join(', ')}`);
-  if (cleanPair.length < 5 || cleanPair.length > 8) throw new Error('El par debe tener entre 5-8 caracteres');
+  if (cleanPair.length < 5) throw new Error('El par debe tener al menos 5 caracteres');
   return cleanPair;
 }
 
