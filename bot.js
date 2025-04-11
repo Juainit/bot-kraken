@@ -9,7 +9,7 @@ const path = require('path');
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
-const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 600000;
+const CHECK_INTERVAL = parseInt(process.env.CHECK_INTERVAL) || 180000;
 const DB_PATH = '/data/trades.db';
 
 // Validación de variables de entorno
