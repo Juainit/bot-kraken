@@ -311,16 +311,15 @@ app.get('/trades/detalle', (req, res) => {
 
 app.get('/sincronizar', async (req, res) => {
   try {
-    const tradesHistory = await kraken.api('TradesHistory');
-    const closedOrders = await kraken.api('ClosedOrders');
-
+    const tradesHistory = await kraken.api('TradesHistory', {});
+    const closedOrders = await kraken.api('ClosedOrders', {});
     const trades = tradesHistory.result.trades;
     const orders = closedOrders.result.closed;
 
     let nuevos = 0;
     let actualizados = 0;
 
-    // 1. Insertar nuevas compras y detectar ventas desde TradesHistory
+    // 1. Insertar nuevas compras y actualizar ventas desde TradesHistory
     for (const txid in trades) {
       const t = trades[txid];
       const pair = t.pair.toUpperCase();
@@ -350,28 +349,33 @@ app.get('/sincronizar', async (req, res) => {
         });
       } else if (type === "sell") {
         await new Promise((resolve, reject) => {
-          db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1", [pair], (err, row) => {
-            if (err || !row) return resolve();
-            const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
-            db.run(`
-              UPDATE trades 
-              SET status = 'completed', 
-                  sellPrice = ?, 
-                  profitPercent = ?, 
-                  updatedAt = ?, 
-                  sellTime = ?
-              WHERE id = ?`,
-              [price, profitPercent, time, time, row.id],
-              (err2) => {
-                if (!err2) actualizados++;
-                resolve();
-              });
-          });
+          db.get(
+            "SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1",
+            [pair],
+            (err, row) => {
+              if (err || !row) return resolve();
+
+              const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
+              db.run(
+                `UPDATE trades 
+                 SET status = 'completed', 
+                     sellPrice = ?, 
+                     profitPercent = ?, 
+                     sellTime = ?
+                 WHERE id = ?`,
+                [price, profitPercent, time, row.id],
+                (err2) => {
+                  if (!err2) actualizados++;
+                  resolve();
+                }
+              );
+            }
+          );
         });
       }
     }
 
-    // 2. Buscar ventas no registradas con ClosedOrders
+    // 2. Actualizar ventas detectadas por ClosedOrders si aún no tienen sellTime
     for (const orderId in orders) {
       const o = orders[orderId];
       if (o.status !== 'closed' || o.descr.type !== 'sell') continue;
@@ -381,24 +385,24 @@ app.get('/sincronizar', async (req, res) => {
       const time = new Date(o.closetm * 1000).toISOString();
 
       await new Promise((resolve, reject) => {
-        db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1", [pair], (err, row) => {
-          if (err || !row) return resolve();
+        db.get(
+          "SELECT * FROM trades WHERE pair = ? AND status = 'completed' AND sellPrice IS NOT NULL AND sellTime IS NULL ORDER BY createdAt ASC LIMIT 1",
+          [pair],
+          (err, row) => {
+            if (err || !row) return resolve();
 
-          const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
-          db.run(`
-            UPDATE trades 
-            SET status = 'completed', 
-                sellPrice = ?, 
-                profitPercent = ?, 
-                updatedAt = ?, 
-                sellTime = ?
-            WHERE id = ?`,
-            [price, profitPercent, time, time, row.id],
-            (err2) => {
-              if (!err2) actualizados++;
-              resolve();
-            });
-        });
+            db.run(
+              `UPDATE trades 
+               SET sellTime = ?
+               WHERE id = ?`,
+              [time, row.id],
+              (err2) => {
+                if (!err2) actualizados++;
+                resolve();
+              }
+            );
+          }
+        );
       });
     }
 
