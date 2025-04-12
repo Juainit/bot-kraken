@@ -324,7 +324,7 @@ app.get('/sincronizar', async (req, res) => {
       const price = parseFloat(t.price);
       const volume = parseFloat(t.vol);
 
-      // Verifica si este txid ya existe como buyOrderId
+      // Verifica si este txid ya existe
       const exists = await new Promise((resolve, reject) => {
         db.get("SELECT * FROM trades WHERE buyOrderId = ?", [txid], (err, row) => {
           if (err) return reject(err);
@@ -334,7 +334,7 @@ app.get('/sincronizar', async (req, res) => {
 
       if (!exists) {
         if (type === "buy") {
-          // Inserta nueva compra
+          // Insertar compra
           await new Promise((resolve, reject) => {
             db.run(`
               INSERT INTO trades (pair, quantity, buyPrice, highestPrice, stopPercent, buyOrderId, createdAt)
@@ -347,14 +347,18 @@ app.get('/sincronizar', async (req, res) => {
               });
           });
         } else if (type === "sell") {
-          // Busca un trade activo con ese par y actualiza
+          // Buscar un trade activo sin sellPrice para ese par
           await new Promise((resolve, reject) => {
-            db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' LIMIT 1", [pair], (err, row) => {
-              if (err || !row) return resolve(); // no hay trade activo
+            db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1", [pair], (err, row) => {
+              if (err || !row) return resolve(); // No hay trade activo para cerrar
+              
               const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
               db.run(`
                 UPDATE trades 
-                SET sellPrice = ?, profitPercent = ?, status = 'completed', updatedAt = ?
+                SET status = 'completed', 
+                    sellPrice = ?, 
+                    profitPercent = ?, 
+                    updatedAt = ?
                 WHERE id = ?`,
                 [price, profitPercent, time, row.id],
                 (err2) => {
@@ -370,7 +374,7 @@ app.get('/sincronizar', async (req, res) => {
     res.json({
       status: 'ok',
       nuevos_insertados: nuevos,
-      actualizados: actualizados
+      trades_actualizados: actualizados
     });
   } catch (error) {
     console.error('❌ Error al sincronizar:', error.message);
