@@ -309,7 +309,76 @@ app.get('/trades/detalle', (req, res) => {
   });
 });
 
-// ⚠️ Endpoint temporal para eliminar un trade por ID
+app.get('/sincronizar', async (req, res) => {
+  try {
+    const tradesHistory = await kraken.api('TradesHistory', {});
+    const trades = tradesHistory.result.trades;
+    let nuevos = 0;
+    let actualizados = 0;
+
+    for (const txid in trades) {
+      const t = trades[txid];
+      const pair = t.pair.toUpperCase();
+      const type = t.type; // "buy" o "sell"
+      const time = new Date(t.time * 1000).toISOString();
+      const price = parseFloat(t.price);
+      const volume = parseFloat(t.vol);
+
+      // Verifica si este txid ya existe como buyOrderId
+      const exists = await new Promise((resolve, reject) => {
+        db.get("SELECT * FROM trades WHERE buyOrderId = ?", [txid], (err, row) => {
+          if (err) return reject(err);
+          resolve(row);
+        });
+      });
+
+      if (!exists) {
+        if (type === "buy") {
+          // Inserta nueva compra
+          await new Promise((resolve, reject) => {
+            db.run(`
+              INSERT INTO trades (pair, quantity, buyPrice, highestPrice, stopPercent, buyOrderId, createdAt)
+              VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [pair, volume, price, price, 2, txid, time],
+              function (err) {
+                if (err) return reject(err);
+                nuevos++;
+                resolve();
+              });
+          });
+        } else if (type === "sell") {
+          // Busca un trade activo con ese par y actualiza
+          await new Promise((resolve, reject) => {
+            db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' LIMIT 1", [pair], (err, row) => {
+              if (err || !row) return resolve(); // no hay trade activo
+              const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
+              db.run(`
+                UPDATE trades 
+                SET sellPrice = ?, profitPercent = ?, status = 'completed', updatedAt = ?
+                WHERE id = ?`,
+                [price, profitPercent, time, row.id],
+                (err2) => {
+                  if (!err2) actualizados++;
+                  resolve();
+                });
+            });
+          });
+        }
+      }
+    }
+
+    res.json({
+      status: 'ok',
+      nuevos_insertados: nuevos,
+      actualizados: actualizados
+    });
+  } catch (error) {
+    console.error('❌ Error al sincronizar:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Endpoint temporal para eliminar un trade por ID
 app.delete('/trades/delete/:id', (req, res) => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) return res.status(400).json({ error: 'ID inválido' });
