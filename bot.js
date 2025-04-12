@@ -315,11 +315,12 @@ app.get('/sincronizar', async (req, res) => {
     const closedOrders = await kraken.api('ClosedOrders', {});
 
     const trades = tradesHistory.result.trades;
-    const closed = closedOrders.result.closed;
+    const orders = closedOrders.result.closed;
 
     let nuevos = 0;
     let actualizados = 0;
 
+    // Insertar nuevas compras y detectar ventas desde TradesHistory
     for (const txid in trades) {
       const t = trades[txid];
       const pair = t.pair.toUpperCase();
@@ -349,7 +350,8 @@ app.get('/sincronizar', async (req, res) => {
         });
       }
 
-      if (type === "sell") {
+      // Si es una venta, buscar el trade activo más antiguo sin sellPrice
+      else if (type === "sell") {
         await new Promise((resolve, reject) => {
           db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1", [pair], (err, row) => {
             if (err || !row) return resolve();
@@ -357,13 +359,12 @@ app.get('/sincronizar', async (req, res) => {
             const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
             db.run(`
               UPDATE trades 
-              SET status = 'completed',
-                  sellPrice = ?,
-                  profitPercent = ?,
-                  updatedAt = ?,
+              SET status = 'completed', 
+                  sellPrice = ?, 
+                  profitPercent = ?, 
                   sellTime = ?
               WHERE id = ?`,
-              [price, profitPercent, time, time, row.id],
+              [price, profitPercent, time, row.id],
               (err2) => {
                 if (!err2) actualizados++;
                 resolve();
@@ -373,15 +374,14 @@ app.get('/sincronizar', async (req, res) => {
       }
     }
 
-    // Verificación adicional con ClosedOrders (por si faltó alguna venta)
-    for (const orderId in closed) {
-      const order = closed[orderId];
-      if (order.status !== 'closed') continue;
-      if (!order.descr || order.descr.type !== 'sell') continue;
+    // Detectar ventas faltantes usando ClosedOrders
+    for (const orderId in orders) {
+      const o = orders[orderId];
+      if (o.status !== 'closed' || o.descr.type !== 'sell') continue;
 
-      const pair = order.descr.pair.toUpperCase();
-      const price = parseFloat(order.price);
-      const time = new Date(order.closetm * 1000).toISOString();
+      const pair = o.descr.pair.toUpperCase();
+      const price = parseFloat(o.price);
+      const time = new Date(o.closetm * 1000).toISOString();
 
       await new Promise((resolve, reject) => {
         db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1", [pair], (err, row) => {
@@ -390,13 +390,12 @@ app.get('/sincronizar', async (req, res) => {
           const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
           db.run(`
             UPDATE trades 
-            SET status = 'completed',
-                sellPrice = ?,
-                profitPercent = ?,
-                updatedAt = ?,
+            SET status = 'completed', 
+                sellPrice = ?, 
+                profitPercent = ?, 
                 sellTime = ?
             WHERE id = ?`,
-            [price, profitPercent, time, time, row.id],
+            [price, profitPercent, time, row.id],
             (err2) => {
               if (!err2) actualizados++;
               resolve();
@@ -410,7 +409,6 @@ app.get('/sincronizar', async (req, res) => {
       nuevos_insertados: nuevos,
       trades_actualizados: actualizados
     });
-
   } catch (error) {
     console.error('❌ Error al sincronizar:', error.message);
     res.status(500).json({ error: error.message });
