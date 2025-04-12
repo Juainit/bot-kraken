@@ -290,6 +290,25 @@ app.get('/resumen', (req, res) => {
   });
 });
 
+app.get('/trades/detalle', (req, res) => {
+  db.all(`
+    SELECT 
+      id,
+      pair,
+      buyPrice,
+      sellPrice,
+      profitPercent,
+      datetime(createdAt) as buyTime,
+      (SELECT datetime(createdAt) FROM trades AS t2 WHERE t2.id > trades.id AND t2.pair = trades.pair AND t2.status = 'completed' ORDER BY t2.id LIMIT 1) AS sellTime
+    FROM trades
+    WHERE status = 'completed' AND profitPercent IS NOT NULL
+    ORDER BY id ASC
+  `, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json(rows);
+  });
+});
+
 // ⚠️ Endpoint temporal para eliminar un trade por ID
 app.delete('/trades/delete/:id', (req, res) => {
   const id = parseInt(req.params.id);
