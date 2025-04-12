@@ -311,8 +311,8 @@ app.get('/trades/detalle', (req, res) => {
 
 app.get('/sincronizar', async (req, res) => {
   try {
-    const tradesHistory = await kraken.api('TradesHistory', {});
-    const closedOrders = await kraken.api('ClosedOrders', {});
+    const tradesHistory = await kraken.api('TradesHistory');
+    const closedOrders = await kraken.api('ClosedOrders');
 
     const trades = tradesHistory.result.trades;
     const orders = closedOrders.result.closed;
@@ -320,7 +320,7 @@ app.get('/sincronizar', async (req, res) => {
     let nuevos = 0;
     let actualizados = 0;
 
-    // Insertar nuevas compras y detectar ventas desde TradesHistory
+    // 1. Insertar nuevas compras y detectar ventas desde TradesHistory
     for (const txid in trades) {
       const t = trades[txid];
       const pair = t.pair.toUpperCase();
@@ -348,23 +348,20 @@ app.get('/sincronizar', async (req, res) => {
               resolve();
             });
         });
-      }
-
-      // Si es una venta, buscar el trade activo más antiguo sin sellPrice
-      else if (type === "sell") {
+      } else if (type === "sell") {
         await new Promise((resolve, reject) => {
           db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1", [pair], (err, row) => {
             if (err || !row) return resolve();
-
             const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
             db.run(`
               UPDATE trades 
               SET status = 'completed', 
                   sellPrice = ?, 
                   profitPercent = ?, 
+                  updatedAt = ?, 
                   sellTime = ?
               WHERE id = ?`,
-              [price, profitPercent, time, row.id],
+              [price, profitPercent, time, time, row.id],
               (err2) => {
                 if (!err2) actualizados++;
                 resolve();
@@ -374,7 +371,7 @@ app.get('/sincronizar', async (req, res) => {
       }
     }
 
-    // Detectar ventas faltantes usando ClosedOrders
+    // 2. Buscar ventas no registradas con ClosedOrders
     for (const orderId in orders) {
       const o = orders[orderId];
       if (o.status !== 'closed' || o.descr.type !== 'sell') continue;
@@ -393,9 +390,10 @@ app.get('/sincronizar', async (req, res) => {
             SET status = 'completed', 
                 sellPrice = ?, 
                 profitPercent = ?, 
+                updatedAt = ?, 
                 sellTime = ?
             WHERE id = ?`,
-            [price, profitPercent, time, row.id],
+            [price, profitPercent, time, time, row.id],
             (err2) => {
               if (!err2) actualizados++;
               resolve();
