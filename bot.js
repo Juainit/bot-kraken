@@ -318,7 +318,48 @@ app.get('/sincronizar', async (req, res) => {
 
     let nuevos = 0;
     let actualizados = 0;
+    
+// Corregir trades que tienen sellPrice pero no tienen sellTime
+for (const orderId in orders) {
+  const order = orders[orderId];
+  if (
+    order.status === 'closed' &&
+    order.descr?.type === 'sell' &&
+    order.closetm
+  ) {
+    const pair = order.descr.pair.toUpperCase();
+    const sellTime = new Date(order.closetm * 1000).toISOString();
+    const price = parseFloat(order.price);
 
+    await new Promise((resolve) => {
+      db.get(
+        `SELECT * FROM trades 
+         WHERE pair = ? AND sellPrice = ? AND (sellTime IS NULL OR sellTime = '') 
+         ORDER BY createdAt ASC LIMIT 1`,
+        [pair, price],
+        (err, row) => {
+          if (err || !row) return resolve();
+
+          const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
+
+          db.run(
+            `UPDATE trades 
+             SET sellTime = ?, status = 'completed', profitPercent = ? 
+             WHERE id = ?`,
+            [sellTime, profitPercent, row.id],
+            (err2) => {
+              if (!err2) {
+                console.log(`✅ Corregido sellTime para ${pair} ID ${row.id}`);
+                actualizados++;
+              }
+              resolve();
+            }
+          );
+        }
+      );
+    });
+  }
+}
     // 1. Insertar nuevas compras y actualizar ventas desde TradesHistory
     for (const txid in trades) {
       const t = trades[txid];
