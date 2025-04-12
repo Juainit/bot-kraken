@@ -265,6 +265,31 @@ app.get('/trades/all', (req, res) => {
   });
 });
 
+app.get('/resumen', (req, res) => {
+  db.all(`
+    SELECT 
+      pair,
+      COUNT(*) AS total_trades,
+      SUM(profitPercent) AS total_profit_percent,
+      AVG(profitPercent) AS avg_profit_percent
+    FROM trades
+    WHERE status = 'completed' AND profitPercent IS NOT NULL
+    GROUP BY pair
+    ORDER BY total_profit_percent DESC
+  `, (err, rows) => {
+    if (err) return res.status(500).json({ error: err.message });
+    
+    db.get("SELECT COUNT(*) AS total FROM trades", (err2, countRow) => {
+      if (err2) return res.status(500).json({ error: err2.message });
+
+      res.json({
+        totalTrades: countRow.total,
+        resumenPorMoneda: rows
+      });
+    });
+  });
+});
+
 // ⚠️ Endpoint temporal para eliminar un trade por ID
 app.delete('/trades/delete/:id', (req, res) => {
   const id = parseInt(req.params.id);
