@@ -81,8 +81,8 @@ async function syncDatabaseWithKraken() {
         if (!row) {
           // Insertar nuevo trade si no existe
           db.run(
-            `INSERT INTO trades (pair, quantity, buyPrice, buyOrderId, status, createdAt) VALUES (?, ?, ?, ?, ?, ?)`,
-            [pair, volume, price, txid, 'active', time],
+            `INSERT INTO trades (pair, quantity, stopPercent, highestPrice, buyPrice, buyOrderId, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [pair, volume, 2, price, price, txid, 'active', time], // Usa 2 como valor por defecto para stopPercent
             (err) => {
               if (err) console.error('Error al insertar trade:', err);
             }
