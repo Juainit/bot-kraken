@@ -8,7 +8,7 @@ const sqlite3 = require('sqlite3').verbose();
 dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 3000;
-const DB_PATH = '/data/trades.db';
+const DB_PATH = '/data/trades.db'; // Asegúrate de que esta ruta sea correcta y accesible
 const CHECK_INTERVAL = 540000; // 9 minutos en milisegundos
 
 // Validación de variables de entorno
@@ -21,7 +21,13 @@ if (missingVars.length > 0) {
 }
 
 const kraken = new KrakenClient(process.env.API_KEY, process.env.API_SECRET);
-const db = new sqlite3.Database(DB_PATH);
+const db = new sqlite3.Database(DB_PATH, (err) => {
+  if (err) {
+    console.error('❌ Error al abrir la base de datos:', err.message);
+  } else {
+    console.log('✅ Conexión a la base de datos SQLite establecida.');
+  }
+});
 
 // Manejo de cierre limpio
 process.on('SIGTERM', () => {
@@ -53,7 +59,7 @@ db.serialize(() => {
     )
   `, (err) => {
     if (err) {
-      console.error('Error al crear la tabla trades:', err);
+      console.error('Error al crear la tabla trades:', err.message);
     } else {
       console.log('Tabla trades creada o verificada exitosamente.');
     }
@@ -62,7 +68,7 @@ db.serialize(() => {
   // Verificar la estructura de la tabla
   db.all("PRAGMA table_info(trades)", (err, columns) => {
     if (err) {
-      console.error('Error al obtener la información de la tabla:', err);
+      console.error('Error al obtener la información de la tabla:', err.message);
     } else {
       console.log('Estructura de la tabla trades:', columns);
     }
@@ -84,9 +90,11 @@ async function syncDatabaseWithKraken() {
       const price = parseFloat(trade.price);
       const volume = parseFloat(trade.vol);
 
+      console.log(`Procesando trade: ${txid}, Pair: ${pair}, Price: ${price}, Volume: ${volume}`);
+
       db.get("SELECT * FROM trades WHERE buyOrderId = ?", [txid], (err, row) => {
         if (err) {
-          console.error('Error al verificar trade:', err);
+          console.error('Error al verificar trade:', err.message);
           return;
         }
 
@@ -95,7 +103,8 @@ async function syncDatabaseWithKraken() {
             `INSERT INTO trades (pair, quantity, stopPercent, highestPrice, buyPrice, buyOrderId, status, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
             [pair, volume, 2, price, price, txid, 'active', time],
             (err) => {
-              if (err) console.error('Error al insertar trade:', err);
+              if (err) console.error('Error al insertar trade:', err.message);
+              else console.log(`Trade insertado: ${txid}`);
             }
           );
         } else {
@@ -103,7 +112,8 @@ async function syncDatabaseWithKraken() {
             `UPDATE trades SET quantity = ?, buyPrice = ?, status = ?, createdAt = ? WHERE buyOrderId = ?`,
             [volume, price, 'active', time, txid],
             (err) => {
-              if (err) console.error('Error al actualizar trade:', err);
+              if (err) console.error('Error al actualizar trade:', err.message);
+              else console.log(`Trade actualizado: ${txid}`);
             }
           );
         }
@@ -112,7 +122,7 @@ async function syncDatabaseWithKraken() {
 
     console.log('✅ Base de datos sincronizada con Kraken');
   } catch (error) {
-    console.error('❌ Error al sincronizar con Kraken:', error);
+    console.error('❌ Error al sincronizar con Kraken:', error.message);
   }
 }
 
@@ -128,7 +138,7 @@ app.post('/comprar', async (req, res) => {
 
     db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active'", [cleanPair], async (err, row) => {
       if (err) {
-        console.error('Error al verificar trade:', err);
+        console.error('Error al verificar trade:', err.message);
         return res.status(500).json({ error: 'Error al verificar trade' });
       }
 
@@ -158,9 +168,10 @@ app.post('/comprar', async (req, res) => {
         [cleanPair, volume, trailingStopPercent, buyPrice, buyPrice, order.result.txid[0], 'active', new Date().toISOString()],
         (err) => {
           if (err) {
-            console.error('Error al insertar trade:', err);
+            console.error('Error al insertar trade:', err.message);
             return res.status(500).json({ error: 'Error al insertar trade' });
           }
+          console.log(`Compra ejecutada: ${order.result.txid[0]}`);
           res.status(200).json({ status: 'compra ejecutada', orderId: order.result.txid[0], pair: cleanPair, cantidadComprada: volume });
         }
       );
@@ -176,7 +187,7 @@ async function monitorTrailingStop() {
   try {
     db.all("SELECT * FROM trades WHERE status = 'active'", async (err, rows) => {
       if (err) {
-        console.error('Error al obtener trades activos:', err);
+        console.error('Error al obtener trades activos:', err.message);
         return;
       }
 
@@ -207,20 +218,26 @@ async function monitorTrailingStop() {
                  sellPrice = ?,
                  profitPercent = ?
              WHERE id = ?`,
-            [currentPrice, profitPercent, trade.id]
+            [currentPrice, profitPercent, trade.id],
+            (err) => {
+              if (err) console.error('Error al actualizar trade después de la venta:', err.message);
+              else console.log(`Venta automática ejecutada: ${order.result.txid[0]}`);
+            }
           );
-
-          console.log(`💥 VENTA AUTOMÁTICA: ${volume} en ${cleanPair} debido a trailing stop`);
         } else {
           await db.run(
             `UPDATE trades SET highestPrice = ? WHERE id = ?`,
-            [newHighestPrice, trade.id]
+            [newHighestPrice, trade.id],
+            (err) => {
+              if (err) console.error('Error al actualizar highestPrice:', err.message);
+              else console.log(`Precio más alto actualizado para trade ID: ${trade.id}`);
+            }
           );
         }
       }
     });
   } catch (error) {
-    console.error('❌ Error en el monitoreo de trailing stop:', error);
+    console.error('❌ Error en el monitoreo de trailing stop:', error.message);
   }
 }
 
@@ -232,6 +249,10 @@ app.use(express.json());
 
 app.get('/status', (req, res) => {
   db.get("SELECT COUNT(*) as active FROM trades WHERE status = 'active'", (err, row) => {
+    if (err) {
+      console.error('Error al obtener el estado:', err.message);
+      return res.status(500).json({ error: 'Error al obtener el estado' });
+    }
     res.status(200).json({ status: 'running', activeTrades: row ? row.active : 0, uptime: process.uptime() });
   });
 });
