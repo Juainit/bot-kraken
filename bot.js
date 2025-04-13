@@ -310,151 +310,114 @@ const express = require('express');
  });
  
  app.get('/sincronizar', async (req, res) => {
-   try {
-     const tradesHistory = await kraken.api('TradesHistory');
-     const closedOrders = await kraken.api('ClosedOrders');
- 
-     const tradesHistory = await kraken.api('TradesHistory', {});
-     const closedOrders = await kraken.api('ClosedOrders', {});
-     const trades = tradesHistory.result.trades;
-     const orders = closedOrders.result.closed;
- 
-     let nuevos = 0;
-     let actualizados = 0;
- 
-     // 1. Insertar nuevas compras y detectar ventas desde TradesHistory
-     // 1. Insertar nuevas compras y actualizar ventas desde TradesHistory
-     for (const txid in trades) {
-       const t = trades[txid];
-       const pair = t.pair.toUpperCase();
-       const type = t.type;
-       const time = new Date(t.time * 1000).toISOString();
-       const price = parseFloat(t.price);
-       const volume = parseFloat(t.vol);
- 
-       const exists = await new Promise((resolve, reject) => {
-         db.get("SELECT * FROM trades WHERE buyOrderId = ?", [txid], (err, row) => {
-           if (err) return reject(err);
-           resolve(row);
-         });
-       });
- 
-       if (!exists && type === "buy") {
-         await new Promise((resolve, reject) => {
-           db.run(`
-             INSERT INTO trades (pair, quantity, buyPrice, highestPrice, stopPercent, buyOrderId, createdAt)
+  try {
+    // Obtener historial de trades y órdenes cerradas
+    const tradesHistory = await kraken.api('TradesHistory');
+    const closedOrders = await kraken.api('ClosedOrders');
+    
+    const trades = tradesHistory.result.trades || {};
+    const orders = closedOrders.result.closed || {};
+
+    let nuevos = 0;
+    let actualizados = 0;
+
+    // 1. Procesar trades (compras y ventas)
+    for (const txid in trades) {
+      const t = trades[txid];
+      const pair = t.pair.toUpperCase();
+      const type = t.type;
+      const time = new Date(t.time * 1000).toISOString();
+      const price = parseFloat(t.price);
+      const volume = parseFloat(t.vol);
+
+      // Verificar si el trade ya existe
+      const exists = await new Promise((resolve) => {
+        db.get("SELECT * FROM trades WHERE buyOrderId = ?", [txid], (err, row) => {
+          resolve(!err && row);
+        });
+      });
+
+      if (!exists && type === "buy") {
+        // Insertar nueva compra
+        await new Promise((resolve) => {
+          db.run(
+            `INSERT INTO trades (pair, quantity, buyPrice, highestPrice, stopPercent, buyOrderId, createdAt)
              VALUES (?, ?, ?, ?, ?, ?, ?)`,
-             [pair, volume, price, price, 2, txid, time],
-             function (err) {
-               if (err) return reject(err);
-               nuevos++;
-               resolve();
-             });
-         });
-       } else if (type === "sell") {
-         await new Promise((resolve, reject) => {
-           db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1", [pair], (err, row) => {
-             if (err || !row) return resolve();
-             const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
-             db.run(`
-               UPDATE trades 
-               SET status = 'completed', 
-                   sellPrice = ?, 
-                   profitPercent = ?, 
-                   updatedAt = ?, 
-                   sellTime = ?
-               WHERE id = ?`,
-               [price, profitPercent, time, time, row.id],
-               (err2) => {
-                 if (!err2) actualizados++;
-                 resolve();
-               });
-           });
-           db.get(
-             "SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1",
-             [pair],
-             (err, row) => {
-               if (err || !row) return resolve();
- 
-               const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
-               db.run(
-                 `UPDATE trades 
-                  SET status = 'completed', 
-                      sellPrice = ?, 
-                      profitPercent = ?, 
-                      sellTime = ?
-                  WHERE id = ?`,
-                 [price, profitPercent, time, row.id],
-                 (err2) => {
-                   if (!err2) actualizados++;
-                   resolve();
-                 }
-               );
-             }
-           );
-         });
-       }
-     }
- 
-     // 2. Buscar ventas no registradas con ClosedOrders
-     // 2. Actualizar ventas detectadas por ClosedOrders si aún no tienen sellTime
-     for (const orderId in orders) {
-       const o = orders[orderId];
-       if (o.status !== 'closed' || o.descr.type !== 'sell') continue;
- 
-       const pair = o.descr.pair.toUpperCase();
-       const price = parseFloat(o.price);
-       const time = new Date(o.closetm * 1000).toISOString();
- 
-       await new Promise((resolve, reject) => {
-         db.get("SELECT * FROM trades WHERE pair = ? AND status = 'active' AND sellPrice IS NULL ORDER BY createdAt ASC LIMIT 1", [pair], (err, row) => {
-           if (err || !row) return resolve();
-         db.get(
-           "SELECT * FROM trades WHERE pair = ? AND status = 'completed' AND sellPrice IS NOT NULL AND sellTime IS NULL ORDER BY createdAt ASC LIMIT 1",
-           [pair],
-           (err, row) => {
-             if (err || !row) return resolve();
- 
-           const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
-           db.run(`
-             UPDATE trades 
-             SET status = 'completed', 
-                 sellPrice = ?, 
-                 profitPercent = ?, 
-                 updatedAt = ?, 
-                 sellTime = ?
-             WHERE id = ?`,
-             [price, profitPercent, time, time, row.id],
-             (err2) => {
-               if (!err2) actualizados++;
-               resolve();
-             });
-         });
-             db.run(
-               `UPDATE trades 
-                SET sellTime = ?
-                WHERE id = ?`,
-               [time, row.id],
-               (err2) => {
-                 if (!err2) actualizados++;
-                 resolve();
-               }
-             );
-           }
-         );
-       });
-     }
- 
-     res.json({
-       status: 'ok',
-       nuevos_insertados: nuevos,
-       trades_actualizados: actualizados
-     });
-   } catch (error) {
-     console.error('❌ Error al sincronizar:', error.message);
-     res.status(500).json({ error: error.message });
-   }
- });
+            [pair, volume, price, price, 2, txid, time],
+            function(err) {
+              if (!err) nuevos++;
+              resolve();
+            }
+          );
+        });
+      } else if (type === "sell") {
+        // Actualizar venta
+        await new Promise((resolve) => {
+          db.get(
+            "SELECT * FROM trades WHERE pair = ? AND status = 'active' ORDER BY createdAt ASC LIMIT 1",
+            [pair],
+            (err, row) => {
+              if (err || !row) return resolve();
+              
+              const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
+              db.run(
+                `UPDATE trades 
+                 SET status = 'completed', 
+                     sellPrice = ?, 
+                     profitPercent = ?,
+                     updatedAt = ?
+                 WHERE id = ?`,
+                [price, profitPercent, time, row.id],
+                (err) => {
+                  if (!err) actualizados++;
+                  resolve();
+                }
+              );
+            }
+          );
+        });
+      }
+    }
+
+    // 2. Procesar órdenes cerradas para actualizar sellTime
+    for (const orderId in orders) {
+      const o = orders[orderId];
+      if (o.status !== 'closed' || o.descr?.type !== 'sell') continue;
+
+      const pair = o.descr.pair.toUpperCase();
+      const time = new Date(o.closetm * 1000).toISOString();
+
+      await new Promise((resolve) => {
+        db.get(
+          "SELECT * FROM trades WHERE pair = ? AND status = 'completed' AND sellTime IS NULL ORDER BY createdAt ASC LIMIT 1",
+          [pair],
+          (err, row) => {
+            if (err || !row) return resolve();
+            
+            db.run(
+              "UPDATE trades SET sellTime = ? WHERE id = ?",
+              [time, row.id],
+              (err) => {
+                if (!err) actualizados++;
+                resolve();
+              }
+            );
+          }
+        );
+      });
+    }
+
+    res.json({
+      status: 'ok',
+      nuevos_insertados: nuevos,
+      trades_actualizados: actualizados
+    });
+
+  } catch (error) {
+    console.error('❌ Error en /sincronizar:', error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
  
  // Endpoint temporal para eliminar un trade por ID
  app.delete('/trades/delete/:id', (req, res) => {
