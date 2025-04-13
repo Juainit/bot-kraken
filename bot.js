@@ -153,7 +153,7 @@ const express = require('express');
        console.log(`💰 VENTA: ${trade.quantity} ${trade.pair} @ ${currentPrice}`);
      }
    } catch (error) {
-     console.error(`⚠️ Error verificando trade: ${error.message}`);
+     console.error(`⚠️ Error verificando trade ID ${trade.id} (${trade.pair}): ${error.message}`);
    }
  }
  
