@@ -309,113 +309,123 @@ const express = require('express');
    });
  });
  
- app.get('/sincronizar', async (req, res) => {
+ app.get('/sincronizar-completo', async (req, res) => {
   try {
-    // Obtener historial de trades y órdenes cerradas
+    // Paso 1: Limpiar la base de datos existente
+    await new Promise((resolve, reject) => {
+      db.run("DELETE FROM trades", (err) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+    console.log('✅ Base de datos limpiada');
+
+    // Paso 2: Obtener historial completo de Kraken
     const tradesHistory = await kraken.api('TradesHistory');
-    const closedOrders = await kraken.api('ClosedOrders');
-    
     const trades = tradesHistory.result.trades || {};
-    const orders = closedOrders.result.closed || {};
+    
+    console.log(`📊 ${Object.keys(trades).length} trades encontrados en Kraken`);
 
-    let nuevos = 0;
-    let actualizados = 0;
-
-    // 1. Procesar trades (compras y ventas)
+    // Paso 3: Reconstruir la base de datos según el historial real
+    let compras = [];
+    let ventas = [];
+    
+    // Separar compras y ventas
     for (const txid in trades) {
       const t = trades[txid];
-      const pair = t.pair.toUpperCase();
-      const type = t.type;
-      const time = new Date(t.time * 1000).toISOString();
-      const price = parseFloat(t.price);
-      const volume = parseFloat(t.vol);
+      if (t.type === 'buy') {
+        compras.push(t);
+      } else if (t.type === 'sell') {
+        ventas.push(t);
+      }
+    }
 
-      // Verificar si el trade ya existe
-      const exists = await new Promise((resolve) => {
-        db.get("SELECT * FROM trades WHERE buyOrderId = ?", [txid], (err, row) => {
-          resolve(!err && row);
-        });
-      });
+    // Procesar compras primero
+    for (const compra of compras) {
+      const pair = compra.pair.toUpperCase();
+      const time = new Date(compra.time * 1000).toISOString();
+      const price = parseFloat(compra.price);
+      const volume = parseFloat(compra.vol);
+      const cost = parseFloat(compra.cost);
+      const fee = parseFloat(compra.fee);
 
-      if (!exists && type === "buy") {
-        // Insertar nueva compra
-        await new Promise((resolve) => {
+      // Buscar si hay una venta correspondiente
+      const ventaCorrespondiente = ventas.find(v => 
+        v.pair.toUpperCase() === pair && 
+        parseFloat(v.vol) === volume &&
+        new Date(v.time * 1000) > new Date(compra.time * 1000)
+      );
+
+      if (ventaCorrespondiente) {
+        // Trade completo (compra + venta)
+        const sellPrice = parseFloat(ventaCorrespondiente.price);
+        const profitPercent = ((sellPrice - price) / price) * 100;
+        
+        await new Promise((resolve, reject) => {
           db.run(
-            `INSERT INTO trades (pair, quantity, buyPrice, highestPrice, stopPercent, buyOrderId, createdAt)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [pair, volume, price, price, 2, txid, time],
-            function(err) {
-              if (!err) nuevos++;
-              resolve();
+            `INSERT INTO trades (
+              pair, quantity, stopPercent, highestPrice, buyPrice, 
+              buyOrderId, sellPrice, profitPercent, status, createdAt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              pair, 
+              volume, 
+              2, // stopPercent por defecto
+              sellPrice, // highestPrice
+              price, 
+              compra.ordertxid || txid,
+              sellPrice,
+              profitPercent,
+              'completed',
+              time
+            ],
+            (err) => {
+              if (err) reject(err);
+              else resolve();
             }
           );
         });
-      } else if (type === "sell") {
-        // Actualizar venta
-        await new Promise((resolve) => {
-          db.get(
-            "SELECT * FROM trades WHERE pair = ? AND status = 'active' ORDER BY createdAt ASC LIMIT 1",
-            [pair],
-            (err, row) => {
-              if (err || !row) return resolve();
-              
-              const profitPercent = ((price - row.buyPrice) / row.buyPrice) * 100;
-              db.run(
-                `UPDATE trades 
-                 SET status = 'completed', 
-                     sellPrice = ?, 
-                     profitPercent = ?,
-                     updatedAt = ?
-                 WHERE id = ?`,
-                [price, profitPercent, time, row.id],
-                (err) => {
-                  if (!err) actualizados++;
-                  resolve();
-                }
-              );
+      } else {
+        // Trade activo (solo compra)
+        await new Promise((resolve, reject) => {
+          db.run(
+            `INSERT INTO trades (
+              pair, quantity, stopPercent, highestPrice, buyPrice, 
+              buyOrderId, status, createdAt
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              pair, 
+              volume, 
+              2, // stopPercent por defecto
+              price, // highestPrice inicial
+              price, 
+              compra.ordertxid || txid,
+              'active',
+              time
+            ],
+            (err) => {
+              if (err) reject(err);
+              else resolve();
             }
           );
         });
       }
     }
 
-    // 2. Procesar órdenes cerradas para actualizar sellTime
-    for (const orderId in orders) {
-      const o = orders[orderId];
-      if (o.status !== 'closed' || o.descr?.type !== 'sell') continue;
-
-      const pair = o.descr.pair.toUpperCase();
-      const time = new Date(o.closetm * 1000).toISOString();
-
-      await new Promise((resolve) => {
-        db.get(
-          "SELECT * FROM trades WHERE pair = ? AND status = 'completed' AND sellTime IS NULL ORDER BY createdAt ASC LIMIT 1",
-          [pair],
-          (err, row) => {
-            if (err || !row) return resolve();
-            
-            db.run(
-              "UPDATE trades SET sellTime = ? WHERE id = ?",
-              [time, row.id],
-              (err) => {
-                if (!err) actualizados++;
-                resolve();
-              }
-            );
-          }
-        );
-      });
-    }
-
+    console.log('✅ Base de datos reconstruida según historial de Kraken');
     res.json({
-      status: 'ok',
-      nuevos_insertados: nuevos,
-      trades_actualizados: actualizados
+      status: 'success',
+      message: 'Base de datos sincronizada completamente con Kraken',
+      tradesActivos: compras.length - ventas.length,
+      tradesCompletados: ventas.length
     });
 
   } catch (error) {
-    console.error('❌ Error en /sincronizar:', error.message);
-    res.status(500).json({ error: error.message });
+    console.error('❌ Error en sincronización completa:', error);
+    res.status(500).json({ 
+      error: error.message,
+      stack: error.stack 
+    });
   }
 });
  
