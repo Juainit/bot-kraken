@@ -42,7 +42,7 @@ db.serialize(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pair TEXT NOT NULL,
       quantity REAL NOT NULL,
-      stopPercent REAL,
+      stopPercent REAL,  // Columna para el trailing stop
       highestPrice REAL,
       buyPrice REAL,
       buyOrderId TEXT NOT NULL,
@@ -52,6 +52,15 @@ db.serialize(() => {
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `);
+
+  // Verificar la estructura de la tabla
+  db.all("PRAGMA table_info(trades)", (err, columns) => {
+    if (err) {
+      console.error('Error al obtener la información de la tabla:', err);
+    } else {
+      console.log('Estructura de la tabla trades:', columns);
+    }
+  });
 });
 
 // Función para sincronizar la base de datos con Kraken
