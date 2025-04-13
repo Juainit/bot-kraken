@@ -294,6 +294,17 @@ app.get('/balance', async (req, res) => {
   }
 });
 
+app.get('/trades/verify', (req, res) => {
+  db.all("SELECT * FROM trades WHERE status = 'active'", (err, rows) => {
+    if (err) {
+      console.error('Error al obtener trades activos:', err.message);
+      return res.status(500).json({ error: 'Error al obtener trades activos' });
+    }
+    console.log('Trades activos:', rows);
+    res.status(200).json(rows);
+  });
+});
+
 // Endpoint temporal para eliminar un trade por ID
 app.delete('/trades/delete/:id', (req, res) => {
   const id = parseInt(req.params.id);
