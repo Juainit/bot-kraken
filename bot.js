@@ -42,7 +42,7 @@ db.serialize(() => {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       pair TEXT NOT NULL,
       quantity REAL NOT NULL,
-      stopPercent REAL,  // Columna para el trailing stop
+      stopPercent REAL,
       highestPrice REAL,
       buyPrice REAL,
       buyOrderId TEXT NOT NULL,
@@ -51,7 +51,13 @@ db.serialize(() => {
       status TEXT DEFAULT 'active',
       createdAt DATETIME DEFAULT CURRENT_TIMESTAMP
     )
-  `);
+  `, (err) => {
+    if (err) {
+      console.error('Error al crear la tabla trades:', err);
+    } else {
+      console.log('Tabla trades creada o verificada exitosamente.');
+    }
+  });
 
   // Verificar la estructura de la tabla
   db.all("PRAGMA table_info(trades)", (err, columns) => {
